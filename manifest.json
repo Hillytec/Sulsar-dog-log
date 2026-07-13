@@ -1,6 +1,6 @@
 {
-  "name": "K9 Field Log",
-  "short_name": "K9 Log",
+  "name": "Search Dog Log \u2014 NSARDA Suffolk",
+  "short_name": "Search Dog Log",
   "description": "NSARDA Suffolk dog training log \u2014 field data entry, GPX and weather overlays, voice notes, trainer sign-off.",
   "start_url": "./index.html",
   "scope": "./",

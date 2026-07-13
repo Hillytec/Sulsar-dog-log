@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>K9 Field Log</title>
+<title>Search Dog Log</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1B263B">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="K9 Log">
+<meta name="apple-mobile-web-app-title" content="Search Dog Log">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -122,24 +122,18 @@ details.section .section-body{padding:4px 16px 16px;}
 <div id="app"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script>
 (function(){
 
-var state = { role:'handler', screen:'home', draft:null, index:[], recognizingField:null, recognition:null };
+var state = { role:'handler', screen:'home', draft:null, index:[], recognizingField:null, recognition:null,
+  profiles:[], settings:{id:'app',activeProfileId:null,pin:null}, editingProfileId:null,
+  filter:{text:'', dateFrom:'', dateTo:''}, filterOpen:false, locked:false, pinEntry:'', pinError:'' };
 
 function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
-async function storeGet(key){
-  try{ var r = await window.storage.get(key, true); return r ? JSON.parse(r.value) : null; }
-  catch(e){ return null; }
-}
-async function storeSet(key,val){
-  try{ await window.storage.set(key, JSON.stringify(val), true); return true; }
-  catch(e){ console.error('storage error',e); return false; }
-}
-async function storeDelete(key){ try{ await window.storage.delete(key, true); }catch(e){} }
-
-var DB_NAME='k9fieldlog', DB_VERSION=1, STORE='logs', _dbp=null;
+var DB_NAME='k9fieldlog', DB_VERSION=3, STORE='logs', PROFILE_STORE='profile', SETTINGS_STORE='settings', _dbp=null;
 function openDB(){
   if(_dbp) return _dbp;
   _dbp = new Promise(function(resolve,reject){
@@ -147,62 +141,118 @@ function openDB(){
     req.onupgradeneeded = function(e){
       var db = e.target.result;
       if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(SETTINGS_STORE)) db.createObjectStore(SETTINGS_STORE,{keyPath:'id'});
     };
     req.onsuccess = function(){ resolve(req.result); };
     req.onerror = function(){ reject(req.error); };
   });
   return _dbp;
 }
-function dbGetAll(){
+function dbGetAll(store){
   return openDB().then(function(db){
     return new Promise(function(resolve,reject){
-      var tx = db.transaction(STORE,'readonly');
-      var req = tx.objectStore(STORE).getAll();
+      var req = db.transaction(store,'readonly').objectStore(store).getAll();
       req.onsuccess=function(){ resolve(req.result||[]); };
       req.onerror=function(){ reject(req.error); };
     });
   });
 }
-function dbGet(id){
+function dbGet(store, id){
   return openDB().then(function(db){
     return new Promise(function(resolve,reject){
-      var tx = db.transaction(STORE,'readonly');
-      var req = tx.objectStore(STORE).get(id);
+      var req = db.transaction(store,'readonly').objectStore(store).get(id);
       req.onsuccess=function(){ resolve(req.result||null); };
       req.onerror=function(){ reject(req.error); };
     });
   });
 }
-function dbPut(log){
+function dbPut(store, record){
   return openDB().then(function(db){
     return new Promise(function(resolve,reject){
-      var tx = db.transaction(STORE,'readwrite');
-      tx.objectStore(STORE).put(log);
+      var tx = db.transaction(store,'readwrite');
+      tx.objectStore(store).put(record);
       tx.oncomplete=function(){ resolve(true); };
       tx.onerror=function(){ reject(tx.error); };
     });
   });
 }
-function dbDelete(id){
+function dbDelete(store, id){
   return openDB().then(function(db){
     return new Promise(function(resolve,reject){
-      var tx = db.transaction(STORE,'readwrite');
-      tx.objectStore(STORE).delete(id);
+      var tx = db.transaction(store,'readwrite');
+      tx.objectStore(store).delete(id);
       tx.oncomplete=function(){ resolve(true); };
       tx.onerror=function(){ reject(tx.error); };
     });
   });
 }
 
+async function loadAppData(){
+  var profiles = await dbGetAll(PROFILE_STORE);
+  var legacy = profiles.find(function(p){ return p.id==='dog'; });
+  if(legacy){
+    var migrated = {id: uid('prof'), dogName: legacy.dogName||'', handlerName: legacy.handlerName||'', photo: legacy.photo||null};
+    await dbPut(PROFILE_STORE, migrated);
+    await dbDelete(PROFILE_STORE, 'dog');
+    profiles = profiles.filter(function(p){ return p.id!=='dog'; }).concat([migrated]);
+  }
+  state.profiles = profiles;
+  var settings = await dbGet(SETTINGS_STORE, 'app');
+  if(!settings) settings = {id:'app', activeProfileId: profiles[0]?profiles[0].id:null, pin:null};
+  if(!settings.activeProfileId && profiles.length) settings.activeProfileId = profiles[0].id;
+  if(legacy) await dbPut(SETTINGS_STORE, settings);
+  state.settings = settings;
+  state.locked = !!settings.pin;
+}
+function activeProfile(){
+  return state.profiles.find(function(p){ return p.id===state.settings.activeProfileId; }) || null;
+}
+async function saveProfile(p){
+  if(!p.id) p.id = uid('prof');
+  await dbPut(PROFILE_STORE, p);
+  var i = state.profiles.findIndex(function(x){ return x.id===p.id; });
+  if(i>=0) state.profiles[i]=p; else state.profiles.push(p);
+  if(!state.settings.activeProfileId) await setActiveProfile(p.id);
+}
+async function deleteProfile(id){
+  await dbDelete(PROFILE_STORE, id);
+  state.profiles = state.profiles.filter(function(p){ return p.id!==id; });
+  if(state.settings.activeProfileId===id){
+    state.settings.activeProfileId = state.profiles[0]?state.profiles[0].id:null;
+    await dbPut(SETTINGS_STORE, state.settings);
+  }
+}
+async function setActiveProfile(id){
+  state.settings.activeProfileId = id;
+  await dbPut(SETTINGS_STORE, state.settings);
+}
+async function saveSettings(){ await dbPut(SETTINGS_STORE, state.settings); }
+
 async function loadIndex(){
-  var all = await dbGetAll();
+  var all = await dbGetAll(STORE);
   state.index = all.map(function(l){
-    return {id:l.id,date:l.date,dog:l.dog,handler:l.handler,objective:(l.trainingObjective||'').slice(0,70),status:l.status};
+    return {id:l.id,date:l.date,dog:l.dog,handler:l.handler,location:l.location||'',objective:(l.trainingObjective||'').slice(0,70),status:l.status};
   }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'') || b.id.localeCompare(a.id); });
 }
-async function saveLog(log){ await dbPut(log); await loadIndex(); }
-async function loadLog(id){ return await dbGet(id); }
-async function removeLog(id){ await dbDelete(id); await loadIndex(); }
+async function saveLog(log){ await dbPut(STORE, log); await loadIndex(); }
+async function loadLog(id){ return await dbGet(STORE, id); }
+async function removeLog(id){ await dbDelete(STORE, id); await loadIndex(); }
+async function allLogsFull(){ return await dbGetAll(STORE); }
+
+function filteredIndex(){
+  var f = state.filter;
+  return state.index.filter(function(l){
+    if(f.text){
+      var t = f.text.toLowerCase();
+      var hay = ((l.dog||'')+' '+(l.location||'')+' '+(l.handler||'')).toLowerCase();
+      if(hay.indexOf(t)===-1) return false;
+    }
+    if(f.dateFrom && l.date < f.dateFrom) return false;
+    if(f.dateTo && l.date > f.dateTo) return false;
+    return true;
+  });
+}
 
 function exportLog(log){
   var blob = new Blob([JSON.stringify(log,null,2)], {type:'application/json'});
@@ -225,21 +275,175 @@ function importLogFile(file){
   var reader = new FileReader();
   reader.onload = async function(){
     try{
-      var log = JSON.parse(reader.result);
-      if(!log.id || !log.date){ alert('That file does not look like a K9 Field Log export.'); return; }
+      var data = JSON.parse(reader.result);
+      if(data && data.type==='k9fieldlog-backup' && Array.isArray(data.logs)){
+        for(var i=0;i<data.logs.length;i++){ await dbPut(STORE, data.logs[i]); }
+        if(Array.isArray(data.profiles)){
+          for(var j=0;j<data.profiles.length;j++){ await dbPut(PROFILE_STORE, data.profiles[j]); }
+        }
+        await loadAppData();
+        await loadIndex();
+        alert('Imported '+data.logs.length+' log(s) from backup.');
+        state.screen='home'; render();
+        return;
+      }
+      var log = data;
+      if(!log.id || !log.date){ alert('That file does not look like a Search Dog Log export.'); return; }
       await saveLog(log);
       state.draft = log;
       state.screen = (state.role==='handler' && log.status==='draft') ? 'edit' : 'view';
       render();
-    }catch(e){ alert('Could not read that file. Make sure it is a log exported from this app.'); }
+    }catch(e){ alert('Could not read that file. Make sure it is a log or backup exported from this app.'); }
   };
   reader.readAsText(file);
 }
 
+async function downloadLogPDF(log){
+  if(!window.jspdf){ alert('The PDF tool has not finished loading. Check your connection and try again in a moment.'); return; }
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({unit:'pt', format:'a4'});
+  var pageW = doc.internal.pageSize.getWidth();
+  var pageH = doc.internal.pageSize.getHeight();
+  var margin = 42, y = margin, lineH = 14;
+
+  function ensureSpace(h){ if(y+h > pageH-margin){ doc.addPage(); y = margin; } }
+  function sectionTitle(text){
+    ensureSpace(20);
+    doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(230,110,20);
+    doc.text(String(text).toUpperCase(), margin, y); y+=14;
+  }
+  function field(label, value){
+    if(value===undefined||value===null||value==='') return;
+    ensureSpace(12);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(120,120,120);
+    doc.text(String(label).toUpperCase(), margin, y); y+=11;
+    doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+    var lines = doc.splitTextToSize(String(value), pageW-margin*2);
+    ensureSpace(lines.length*lineH+6);
+    doc.text(lines, margin, y); y += lines.length*lineH+8;
+  }
+  function fieldRow(pairs){
+    var colW = (pageW-margin*2-20)/2;
+    var linesArr = pairs.map(function(p){
+      var v = (p[1]===undefined||p[1]===null||p[1]==='') ? '\u2014' : String(p[1]);
+      return doc.splitTextToSize(v, colW);
+    });
+    var maxLines = Math.max(linesArr[0].length, linesArr[1].length);
+    ensureSpace(maxLines*lineH+18);
+    pairs.forEach(function(p,i){
+      var x = margin + i*(colW+20);
+      doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(120,120,120);
+      doc.text(String(p[0]).toUpperCase(), x, y);
+    });
+    y += 11;
+    pairs.forEach(function(p,i){
+      var x = margin + i*(colW+20);
+      doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+      doc.text(linesArr[i], x, y);
+    });
+    y += maxLines*lineH+8;
+  }
+
+  doc.setFillColor(27,38,59); doc.rect(0,0,pageW,64,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(17);
+  doc.text('Search Dog Log', margin, 34);
+  doc.setFont('helvetica','normal'); doc.setFontSize(10); doc.setTextColor(224,225,221);
+  doc.text('NSARDA Suffolk', margin, 50);
+  doc.setFontSize(10);
+  doc.text(String(log.status).toUpperCase(), pageW-margin, 34, {align:'right'});
+  y = 90;
+
+  fieldRow([['Date', log.date],['Time of day', log.timeOfDay]]);
+  fieldRow([['Handler', log.handler],['Dog', log.dog]]);
+  fieldRow([['Session type', log.type],['Location', log.location]]);
+  field('Training objective', log.trainingObjective);
+
+  sectionTitle('Trail & hides');
+  fieldRow([['Subjects / hides', log.numSubjects],['Trail size', log.trailSize]]);
+  fieldRow([['Trail age', log.trailAge],['Turns / transitions', log.numTurns]]);
+
+  sectionTitle('Scent article');
+  fieldRow([['Scent article', log.scentArticle],['Article type', log.scentArticleType]]);
+  fieldRow([['Scent specific', log.scentSpecific],['Trail', log.trailYes]]);
+  fieldRow([['Direction confirmed', log.directionConfirmed],['Field tech', log.fieldTech]]);
+  field('Time on trail / in area', log.timeOnTrail);
+
+  sectionTitle('Weather');
+  if(log.weather.indoors){
+    field('Conditions', 'Indoors');
+  } else {
+    fieldRow([['Temperature', log.weather.temperature!==''?log.weather.temperature+' C':''],['Humidity', log.weather.humidityPct?log.weather.humidityPct+'%':log.weather.humidityLevel]]);
+    fieldRow([['Wind speed', log.weather.windSpeed!==''?log.weather.windSpeed+' mph':''],['Wind direction', log.weather.windDirDeg!=null?(compassPoint(log.weather.windDirDeg)+' ('+log.weather.windDirDeg+' deg)'):'']]);
+    field('Conditions', log.weather.conditions);
+  }
+  field('Environment / conditions notes', log.environmentConditions);
+
+  sectionTitle('Notes & summary');
+  field('Trainer comments', log.trainerComments);
+  field('Handler comments', log.handlerComments);
+  field('Going forward', log.goingForward);
+  fieldRow([['Reward', log.reward],['Final trained response', log.ftr]]);
+  field('Objectives met', log.objectivesMet);
+  field('Any other comments', log.anyOtherComments);
+
+  if(log.gpx && log.gpx.points && log.gpx.points.length){
+    var mapEl = document.getElementById('gpxMapView');
+    if(mapEl){
+      try{
+        var canvas = await html2canvas(mapEl, {useCORS:true, backgroundColor:'#1B263B'});
+        var imgData = canvas.toDataURL('image/jpeg',0.7);
+        sectionTitle('GPX track \u2014 '+(log.gpx.name||''));
+        var imgW = pageW-margin*2, imgH = imgW*(canvas.height/canvas.width);
+        ensureSpace(imgH+10);
+        doc.addImage(imgData,'JPEG',margin,y,imgW,imgH);
+        y += imgH+16;
+      }catch(e){}
+    }
+  }
+
+  if(log.photos && log.photos.length){
+    sectionTitle('Photos');
+    var perRow=3, gap=10;
+    var cellW = (pageW-margin*2-gap*(perRow-1))/perRow, cellH=cellW, col=0;
+    log.photos.forEach(function(p){
+      if(col===0) ensureSpace(cellH+10);
+      var x = margin+col*(cellW+gap);
+      try{ doc.addImage(p.dataUrl,'JPEG',x,y,cellW,cellH); }catch(e){}
+      col++;
+      if(col>=perRow){ col=0; y+=cellH+gap; }
+    });
+    if(col!==0) y += cellH+gap;
+    y += 6;
+  }
+
+  if(log.trainerSignoff){
+    sectionTitle('Trainer sign-off');
+    ensureSpace(80);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
+    doc.text(log.trainerSignoff.name+'   '+new Date(log.trainerSignoff.date).toLocaleString(), margin, y);
+    y += 14;
+    if(log.trainerSignoff.notes){
+      var nlines = doc.splitTextToSize(log.trainerSignoff.notes, pageW-margin*2);
+      ensureSpace(nlines.length*lineH+6);
+      doc.text(nlines, margin, y); y += nlines.length*lineH+8;
+    }
+    if(log.trainerSignoff.signatureDataUrl){
+      ensureSpace(70);
+      doc.setDrawColor(200,200,200); doc.rect(margin, y, 180, 60);
+      try{ doc.addImage(log.trainerSignoff.signatureDataUrl,'PNG',margin+4,y+4,172,52); }catch(e){}
+      y += 74;
+    }
+  }
+
+  var fname = 'search-dog-log-'+log.date+'-'+(log.location||'log').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'.pdf';
+  doc.save(fname);
+}
+
 function newLog(){
+  var p = activeProfile() || {};
   return {
     id: uid('log'), status:'draft', type:'individual',
-    handler:'Dave Hill', dog:'Barney', date:new Date().toISOString().slice(0,10), timeOfDay:'AM',
+    handler: p.handlerName || '', dog: p.dogName || '', date:new Date().toISOString().slice(0,10), timeOfDay:'AM',
     location:'', trainingObjective:'',
     numSubjects:'', trailSize:'', trailAge:'', numTurns:'',
     scentArticle:'', scentArticleType:'na', timeOnTrail:'',
@@ -255,7 +459,17 @@ function newLog(){
   };
 }
 
-/* ---------- icons ---------- */
+function duplicateLog(src){
+  var n = newLog();
+  n.type = src.type; n.handler = src.handler; n.dog = src.dog; n.location = src.location;
+  n.trainingObjective = src.trainingObjective;
+  n.numSubjects = src.numSubjects; n.trailSize = src.trailSize; n.trailAge = src.trailAge; n.numTurns = src.numTurns;
+  n.scentArticle = src.scentArticle; n.scentArticleType = src.scentArticleType;
+  n.scentSpecific = src.scentSpecific; n.trailYes = src.trailYes; n.directionConfirmed = src.directionConfirmed; n.fieldTech = src.fieldTech;
+  n.reward = src.reward;
+  return n;
+}
+
 function icon(name, size){
   size = size||20;
   var p = {
@@ -270,7 +484,10 @@ function icon(name, size){
     trash:'<path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/>',
     location:'<path d="M12 21s7-6.6 7-11.5A7 7 0 105 9.5C5 14.4 12 21 12 21z" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="12" cy="9.5" r="2.3" fill="currentColor"/>',
     dog:'<path d="M4 12c0-3 2-5 5-5h1l2-2 2 2h1c3 0 5 2 5 5v3a5 5 0 01-5 5H9a5 5 0 01-5-5v-3z" stroke="currentColor" stroke-width="1.6" fill="none"/>',
-    x:'<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+    x:'<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    gear:'<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 13.5a7.4 7.4 0 000-3l1.9-1.5-2-3.4-2.3.9a7.4 7.4 0 00-2.6-1.5L14 2.5h-4l-.4 2.5a7.4 7.4 0 00-2.6 1.5l-2.3-.9-2 3.4L4.6 10.5a7.4 7.4 0 000 3L2.7 15l2 3.4 2.3-.9c.8.7 1.6 1.2 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 002.6-1.5l2.3.9 2-3.4z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/>',
+    lock:'<rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.8" fill="none"/>',
+    copy:'<rect x="8" y="8" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" stroke="currentColor" stroke-width="1.6" fill="none"/>'
   };
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none">'+p[name]+'</svg>';
 }
@@ -361,13 +578,14 @@ function renderMap(elId, gpx){
 }
 
 /* ---------- photos ---------- */
-function compressImage(file){
+function compressImage(file, maxW){
+  maxW = maxW || 1000;
   return new Promise(function(resolve){
     var reader = new FileReader();
     reader.onload = function(){
       var img = new Image();
       img.onload = function(){
-        var maxW=1000, scale=Math.min(1,maxW/img.width);
+        var scale=Math.min(1,maxW/img.width);
         var canvas=document.createElement('canvas');
         canvas.width=Math.round(img.width*scale); canvas.height=Math.round(img.height*scale);
         canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);
@@ -434,10 +652,13 @@ window.toggleMic = toggleMic;
 function header(){
   return '<div class="header"><div class="brand">'+
     '<div style="color:var(--primary)">'+icon('paw',26)+'</div>'+
-    '<div class="brand-title">K9 Field Log<span>NSARDA Suffolk</span></div></div>'+
+    '<div class="brand-title">Search Dog Log<span>NSARDA Suffolk</span></div></div>'+
+    '<div style="display:flex;align-items:center;gap:8px;">'+
     '<div class="role-toggle">'+
       '<button class="'+(state.role==='handler'?'active':'')+'" onclick="App.setRole(\'handler\')">Handler</button>'+
       '<button class="'+(state.role==='trainer'?'active':'')+'" onclick="App.setRole(\'trainer\')">Trainer</button>'+
+    '</div>'+
+    '<button onclick="App.goSettings()" aria-label="Settings" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon('gear',20)+'</button>'+
     '</div></div>';
 }
 function bottomNav(){
@@ -457,19 +678,55 @@ function micRow(fieldId, value, placeholder, label){
 }
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 
+function profileCard(){
+  var p = activeProfile();
+  return '<div class="card" style="display:flex;align-items:center;gap:14px;cursor:pointer;" onclick="App.goProfiles()">'+
+    (p && p.photo ? '<img src="'+p.photo+'" style="width:56px;height:56px;border-radius:50%;object-fit:cover;flex:none;">' :
+      '<div style="width:56px;height:56px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',26)+'</div>')+
+    '<div style="flex:1;min-width:0;">'+
+    '<div style="font-weight:700;font-size:16px;">'+esc(p?p.dogName:'Add your dog')+'</div>'+
+    '<div style="font-size:13px;color:var(--neutral-dim);">'+esc(p?p.handlerName:'Tap to set up a profile')+(state.profiles.length>1?' &middot; '+state.profiles.length+' dogs':'')+'</div>'+
+    '</div><div style="color:var(--neutral-dim);">'+icon('chev',18)+'</div></div>';
+}
+
+function logCardHTML(l, badgeClass, badgeText){
+  return '<div class="log-card"><div class="log-main" onclick="App.openLog(\''+l.id+'\')">'+
+    '<div class="log-date">'+l.date+(l.dog?' &middot; '+esc(l.dog):'')+'</div>'+
+    '<div class="log-obj">'+esc(l.location||'Untitled location')+'</div></div>'+
+    '<span class="badge '+badgeClass+'">'+badgeText+'</span>'+
+    '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;margin-left:2px;" onclick="event.stopPropagation();App.quickDelete(\''+l.id+'\')" aria-label="Delete log">'+icon('trash',16)+'</button>'+
+    '</div>';
+}
+
+function filterBar(){
+  var f = state.filter;
+  var html = '<div class="card" style="padding:12px 14px;">'+
+    '<div style="display:flex;gap:8px;align-items:center;">'+
+    '<input type="text" placeholder="Search dog, location or handler" value="'+esc(f.text)+'" '+
+      'oninput="App.setFilterText(this.value)" style="margin:0;flex:1;">'+
+    '<button type="button" class="mic-btn" style="border-color:var(--neutral-dim);color:var(--neutral-dim);" onclick="App.toggleFilterOpen()" aria-label="Date filter">'+icon('chev',16)+'</button>'+
+    '</div>';
+  if(state.filterOpen){
+    html += '<div class="row2" style="margin-top:10px;">'+
+      '<div><label>From date</label><input type="date" value="'+f.dateFrom+'" oninput="App.setFilterDate(\'dateFrom\',this.value)"></div>'+
+      '<div><label>To date</label><input type="date" value="'+f.dateTo+'" oninput="App.setFilterDate(\'dateTo\',this.value)"></div>'+
+      '</div>';
+    if(f.text||f.dateFrom||f.dateTo) html += '<button class="btn btn-secondary" onclick="App.clearFilter()">Clear filters</button>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function screenHome(){
-  var list = state.index;
-  var body = '<h1 class="page-title">My training logs</h1>';
-  body += '<label class="upload-btn" style="margin-bottom:14px;">'+icon('map',18)+' Import a shared log file<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>';
+  var list = filteredIndex();
+  var body = profileCard();
+  body += '<h1 class="page-title">My training logs</h1>';
+  body += filterBar();
+  body += '<label class="upload-btn" style="margin:14px 0;">'+icon('map',18)+' Import a shared log file<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>';
   if(!list.length){
-    body += '<div class="empty">'+icon('dog',40)+'<div>No logs yet. Tap New log below to start one in the field.</div></div>';
+    body += '<div class="empty">'+icon('dog',40)+'<div>'+(state.index.length?'No logs match this search.':'No logs yet. Tap New log below to start one in the field.')+'</div></div>';
   } else {
-    list.forEach(function(l){
-      body += '<div class="log-card" onclick="App.openLog(\''+l.id+'\')">'+
-        '<div class="log-main"><div class="log-date">'+l.date+' &middot; '+(l.dog||'')+'</div>'+
-        '<div class="log-obj">'+esc(l.objective||'Untitled session')+'</div></div>'+
-        '<span class="badge '+l.status+'">'+l.status+'</span></div>';
-    });
+    list.forEach(function(l){ body += logCardHTML(l, l.status, l.status); });
   }
   return body;
 }
@@ -482,20 +739,99 @@ function screenTrainerQueue(){
   body += '<label class="upload-btn" style="margin-bottom:14px;">'+icon('map',18)+' Import a log to review<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>';
   body += '<div class="eyebrow">Awaiting sign-off</div>';
   if(!pending.length) body += '<div class="empty" style="padding:20px;">Nothing waiting for review.</div>';
-  pending.forEach(function(l){
-    body += '<div class="log-card" onclick="App.openLog(\''+l.id+'\')"><div class="log-main">'+
-      '<div class="log-date">'+l.date+' &middot; '+(l.dog||'')+'</div><div class="log-obj">'+esc(l.objective||'')+'</div></div>'+
-      '<span class="badge submitted">submitted</span></div>';
-  });
+  pending.forEach(function(l){ body += logCardHTML(l, 'submitted', 'submitted'); });
   if(signed.length){
     body += '<div class="eyebrow" style="margin-top:18px;">Signed off</div>';
-    signed.forEach(function(l){
-      body += '<div class="log-card" onclick="App.openLog(\''+l.id+'\')"><div class="log-main">'+
-        '<div class="log-date">'+l.date+' &middot; '+(l.dog||'')+'</div><div class="log-obj">'+esc(l.objective||'')+'</div></div>'+
-        '<span class="badge signed">signed</span></div>';
-    });
+    signed.forEach(function(l){ body += logCardHTML(l, 'signed', 'signed'); });
   }
   return body;
+}
+
+function profileFormCard(p){
+  p = p || {dogName:'', handlerName:'', photo:null};
+  return '<div class="card">'+
+    '<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">'+
+    (p.photo ? '<img src="'+p.photo+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none;">' :
+      '<div style="width:64px;height:64px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',28)+'</div>')+
+    '<label class="upload-btn" style="flex:1;padding:10px;">'+icon('camera',16)+' '+(p.photo?'Change photo':'Add photo')+'<input type="file" accept="image/*" onchange="App.onProfilePhoto(event)"></label>'+
+    '</div>'+
+    '<label>Dog name</label><input type="text" id="profDogName" value="'+esc(p.dogName)+'">'+
+    '<label>Handler name</label><input type="text" id="profHandlerName" value="'+esc(p.handlerName)+'">'+
+    '<div class="btn-row" style="margin-top:6px;">'+
+    '<button class="btn btn-secondary" onclick="App.cancelEditProfile()">Cancel</button>'+
+    '<button class="btn btn-primary" onclick="App.saveProfileForm()">Save</button></div>'+
+    '</div>';
+}
+
+function screenProfiles(){
+  var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
+  body += '<h1 class="page-title">Dog profiles</h1>';
+  if(state.editingProfileId!==null){
+    var editing = state.editingProfileId==='new' ? null : state.profiles.find(function(p){return p.id===state.editingProfileId;});
+    body += profileFormCard(editing || state._newProfileDraft);
+    return body;
+  }
+  if(!state.profiles.length){
+    body += '<div class="empty">'+icon('dog',40)+'<div>No dogs set up yet.</div></div>';
+  } else {
+    state.profiles.forEach(function(p){
+      var isActive = p.id===state.settings.activeProfileId;
+      body += '<div class="card" style="display:flex;align-items:center;gap:12px;'+(isActive?'border-color:var(--primary);':'')+'">'+
+        (p.photo ? '<img src="'+p.photo+'" style="width:48px;height:48px;border-radius:50%;object-fit:cover;flex:none;">' :
+          '<div style="width:48px;height:48px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',22)+'</div>')+
+        '<div style="flex:1;min-width:0;" onclick="App.editExistingProfile(\''+p.id+'\')">'+
+        '<div style="font-weight:700;">'+esc(p.dogName||'Unnamed')+(isActive?' <span style="color:var(--primary);font-size:11px;font-weight:700;">&middot; ACTIVE</span>':'')+'</div>'+
+        '<div style="font-size:13px;color:var(--neutral-dim);">'+esc(p.handlerName||'')+'</div></div>'+
+        (!isActive?'<button class="btn btn-secondary" style="width:auto;padding:8px 12px;font-size:12px;" onclick="App.setActive(\''+p.id+'\')">Use</button>':'')+
+        '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="App.removeProfile(\''+p.id+'\')" aria-label="Delete profile">'+icon('trash',16)+'</button>'+
+        '</div>';
+    });
+  }
+  body += '<button class="btn btn-primary" onclick="App.newProfile()">'+icon('plus',16)+' Add a dog</button>';
+  return body;
+}
+
+function screenSettings(){
+  var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
+  body += '<h1 class="page-title">Settings</h1>';
+
+  body += '<div class="card" style="cursor:pointer;" onclick="App.goProfiles()"><div style="display:flex;justify-content:space-between;align-items:center;">'+
+    '<div><div style="font-weight:700;">Dog profiles</div><div style="font-size:13px;color:var(--neutral-dim);">'+state.profiles.length+' set up</div></div>'+icon('chev',18)+'</div></div>';
+
+  body += '<div class="card">'+
+    '<div class="readonly-label" style="margin-bottom:8px;">'+icon('lock',14)+' App lock</div>';
+  if(state.settings.pin){
+    body += '<div style="font-size:14px;margin-bottom:10px;color:var(--neutral-dim);">A PIN is set. You will need it each time you open the app.</div>'+
+      '<button class="btn btn-danger" onclick="App.removePin()">Remove PIN</button>';
+  } else {
+    body += '<div style="font-size:14px;margin-bottom:10px;color:var(--neutral-dim);">Set a 4-6 digit PIN so the app locks when closed, since it holds photos and locations.</div>'+
+      '<label>New PIN</label><input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="newPin" placeholder="4-6 digits">'+
+      '<label>Confirm PIN</label><input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="confirmPin" placeholder="Re-enter">'+
+      '<button class="btn btn-primary" onclick="App.setPin()">Set PIN</button>';
+  }
+  body += '</div>';
+
+  body += '<div class="card">'+
+    '<div class="readonly-label" style="margin-bottom:8px;">Backup</div>'+
+    '<div style="font-size:14px;margin-bottom:10px;color:var(--neutral-dim);">Export every log on this device as one file, separate from sharing individual logs.</div>'+
+    '<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="App.exportAll()">Export all logs</button>'+
+    '<label class="upload-btn">'+icon('map',18)+' Import a backup file<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>'+
+    '</div>';
+
+  return body;
+}
+
+function lockScreenHTML(){
+  return '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">'+
+    '<div style="color:var(--primary);margin-bottom:14px;">'+icon('lock',36)+'</div>'+
+    '<div style="font-weight:700;font-size:17px;margin-bottom:6px;">Search Dog Log is locked</div>'+
+    '<div style="font-size:13px;color:var(--neutral-dim);margin-bottom:20px;">Enter your PIN to continue</div>'+
+    '<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="pinInput" placeholder="PIN" '+
+      'onkeydown="if(event.key===\'Enter\')App.unlock()" '+
+      'style="text-align:center;font-size:22px;letter-spacing:6px;max-width:200px;" autofocus>'+
+    (state.pinError?'<div style="color:var(--danger);font-size:13px;margin-top:6px;">'+state.pinError+'</div>':'')+
+    '<button class="btn btn-primary" style="max-width:200px;margin-top:14px;" onclick="App.unlock()">Unlock</button>'+
+    '</div>';
 }
 
 function seg(fieldPath, value, options){
@@ -588,7 +924,7 @@ function screenEdit(){
   body += '<div class="btn-row" style="margin-top:6px;">'+
     '<button class="btn btn-secondary" onclick="App.saveDraft()">Save draft</button>'+
     '<button class="btn btn-primary" onclick="App.submitForReview()">Submit for review</button></div>';
-  if(d.status!=='draft') body += '<button class="btn btn-danger" style="margin-top:10px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
+  body += '<button class="btn btn-danger" style="margin-top:10px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
   return body;
 }
 function section(title, open, parts){
@@ -600,9 +936,12 @@ function seg2(fieldPath, value, options){ return seg(fieldPath, value, options);
 function screenView(){
   var d = state.draft;
   var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
-  body += '<h1 class="page-title">'+d.date+' &middot; '+esc(d.dog)+'</h1>';
+  body += '<h1 class="page-title">'+d.date+' &middot; '+esc(d.location||'Untitled location')+'</h1>';
   body += '<span class="badge '+d.status+'" style="margin-bottom:10px;display:inline-block;">'+d.status+'</span>';
-  body += '<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="App.shareLog()">Share log file</button>';
+  body += '<div class="btn-row" style="margin-bottom:14px;">'+
+    '<button class="btn btn-secondary" onclick="App.shareLog()">Share log file</button>'+
+    '<button class="btn btn-primary" onclick="App.downloadPDF()">Download PDF</button></div>';
+  body += '<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="App.duplicateLogTap()">'+icon('copy',16)+' Duplicate this log</button>';
 
   body += roField('Session type', d.type) + roField('Handler', d.handler) + roField('Location', d.location);
   body += roField('Training objective', d.trainingObjective);
@@ -651,6 +990,7 @@ function screenView(){
   } else if(state.role==='handler' && d.status==='draft'){
     body += '<button class="btn btn-primary" onclick="App.editCurrentDraft()">Continue editing</button>';
   }
+  body += '<button class="btn btn-danger" style="margin-top:14px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
   return body;
 }
 function roField(label,val){
@@ -660,11 +1000,18 @@ function roField(label,val){
 
 /* ---------- render / lifecycle ---------- */
 function render(){
+  if(state.locked){
+    document.getElementById('app').innerHTML = lockScreenHTML();
+    setTimeout(function(){ var el=document.getElementById('pinInput'); if(el) el.focus(); },30);
+    return;
+  }
   var html = header();
   if(state.screen==='home') html += '<div class="main">'+screenHome()+'</div>';
   else if(state.screen==='trainer') html += '<div class="main">'+screenTrainerQueue()+'</div>';
   else if(state.screen==='edit') html += '<div class="main">'+screenEdit()+'</div>';
   else if(state.screen==='view') html += '<div class="main">'+screenView()+'</div>';
+  else if(state.screen==='settings') html += '<div class="main">'+screenSettings()+'</div>';
+  else if(state.screen==='profiles') html += '<div class="main">'+screenProfiles()+'</div>';
   html += bottomNav();
   document.getElementById('app').innerHTML = html;
   refreshMicButtons();
@@ -744,7 +1091,89 @@ window.App = {
     state.screen='home'; render();
   },
   clearSignature: function(){ var c=document.getElementById('sigCanvas'); if(c) c.getContext('2d').clearRect(0,0,c.width,c.height); },
+
+  goSettings: function(){ state.screen='settings'; render(); },
+  goProfiles: function(){ state.editingProfileId=null; state.screen='profiles'; render(); },
+  newProfile: function(){ state.editingProfileId='new'; state._newProfileDraft={dogName:'',handlerName:'',photo:null}; render(); },
+  editExistingProfile: function(id){ state.editingProfileId=id; render(); },
+  cancelEditProfile: function(){ state.editingProfileId=null; state._newProfileDraft=null; render(); },
+  onProfilePhoto: function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    compressImage(file, 400).then(function(url){
+      if(state.editingProfileId==='new'){ state._newProfileDraft.photo = url; }
+      else {
+        var p = state.profiles.find(function(x){return x.id===state.editingProfileId;});
+        if(p) p.photo = url;
+      }
+      render();
+    });
+  },
+  saveProfileForm: async function(){
+    var dogName = document.getElementById('profDogName').value.trim();
+    var handlerName = document.getElementById('profHandlerName').value.trim();
+    var p;
+    if(state.editingProfileId==='new'){ p = state._newProfileDraft || {}; }
+    else { p = state.profiles.find(function(x){return x.id===state.editingProfileId;}) || {}; }
+    p.dogName = dogName; p.handlerName = handlerName;
+    await saveProfile(p);
+    state.editingProfileId = null; state._newProfileDraft = null;
+    render();
+  },
+  setActive: async function(id){ await setActiveProfile(id); render(); },
+  removeProfile: async function(id){
+    if(!confirm('Remove this dog profile? Existing logs are not affected.')) return;
+    await deleteProfile(id);
+    render();
+  },
+
+  setFilterText: function(v){ state.filter.text=v; render(); },
+  setFilterDate: function(k,v){ state.filter[k]=v; render(); },
+  toggleFilterOpen: function(){ state.filterOpen=!state.filterOpen; render(); },
+  clearFilter: function(){ state.filter={text:'',dateFrom:'',dateTo:''}; render(); },
+
+  setPin: async function(){
+    var a = document.getElementById('newPin').value.trim();
+    var b = document.getElementById('confirmPin').value.trim();
+    if(!/^\d{4,6}$/.test(a)){ alert('PIN must be 4-6 digits.'); return; }
+    if(a!==b){ alert('PINs do not match.'); return; }
+    state.settings.pin = a;
+    await saveSettings();
+    render();
+  },
+  removePin: async function(){
+    if(!confirm('Remove the app PIN?')) return;
+    state.settings.pin = null;
+    await saveSettings();
+    render();
+  },
+  unlock: function(){
+    var el = document.getElementById('pinInput');
+    var val = el ? el.value.trim() : '';
+    if(val===state.settings.pin){ state.locked=false; state.pinError=''; render(); }
+    else{ state.pinError='Incorrect PIN'; render(); }
+  },
+
+  exportAll: async function(){
+    var logs = await allLogsFull();
+    var backup = { type:'k9fieldlog-backup', version:1, exportedAt:new Date().toISOString(), profiles:state.profiles, logs:logs };
+    var blob = new Blob([JSON.stringify(backup,null,2)], {type:'application/json'});
+    downloadBlob(blob, 'search-dog-log-backup-'+new Date().toISOString().slice(0,10)+'.json');
+  },
+
+  duplicateLogTap: function(){
+    if(!state.draft) return;
+    state.draft = duplicateLog(state.draft);
+    state.screen='edit'; render();
+  },
+
   shareLog: function(){ if(state.draft) exportLog(state.draft); },
+  downloadPDF: function(){ if(state.draft) downloadLogPDF(state.draft); },
+  quickDelete: async function(id){
+    if(!confirm('Delete this log? This cannot be undone.')) return;
+    await removeLog(id);
+    render();
+  },
   onImport: function(e){
     var file = e.target.files[0];
     if(file) importLogFile(file);
@@ -773,6 +1202,7 @@ window.App = {
 /* ---------- boot ---------- */
 (async function boot(){
   document.getElementById('app').innerHTML = '<div class="main" style="padding-top:40px;text-align:center;color:var(--neutral-dim);">Loading logs...</div>';
+  await loadAppData();
   await loadIndex();
   render();
   if('serviceWorker' in navigator){
