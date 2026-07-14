@@ -897,7 +897,9 @@ function screenEdit(){
   ]);
 
   body += section('Photos', false, [
-    '<label class="upload-btn">'+icon('camera',18)+' Add photos<input type="file" accept="image/*" multiple capture="environment" onchange="App.onPhotos(event)"></label>',
+    (d.photos||[]).length < 3 ?
+      '<label class="upload-btn">'+icon('camera',18)+' Upload photos (up to 3)<input type="file" accept="image/*" multiple onchange="App.onPhotos(event)"></label>' :
+      '<div class="notice">Maximum of 3 photos reached. Remove one to add another.</div>',
     '<div class="thumbs" id="thumbGrid">'+ (d.photos||[]).map(function(p){
       return '<div class="thumb"><img src="'+p.dataUrl+'"><button class="rm" onclick="App.removePhoto(\''+p.id+'\')">'+icon('x',12)+'</button></div>';
     }).join('') +'</div>'
@@ -1056,7 +1058,9 @@ window.App = {
   setWeatherField: function(key,val){ state.draft.weather[key]=val; render(); },
   fetchWeather: function(){ fetchWeather(); },
   onPhotos: function(e){
-    var files = Array.from(e.target.files||[]);
+    var remaining = 3 - (state.draft.photos||[]).length;
+    var files = Array.from(e.target.files||[]).slice(0, Math.max(0,remaining));
+    if(!files.length){ render(); return; }
     Promise.all(files.map(compressImage)).then(function(urls){
       urls.forEach(function(u){ state.draft.photos.push({id:uid('p'), dataUrl:u}); });
       render();
