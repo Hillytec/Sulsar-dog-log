@@ -1,4 +1,4 @@
-var CACHE = 'k9fieldlog-v5';
+var CACHE = 'k9fieldlog-v7';
 var ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', function(e){

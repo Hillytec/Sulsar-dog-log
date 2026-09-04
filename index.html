@@ -124,16 +124,23 @@ details.section .section-body{padding:4px 16px 16px;}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
 (function(){
 
-var state = { role:'handler', screen:'home', draft:null, index:[], recognizingField:null, recognition:null,
+var SUPABASE_URL = 'https://rxjylnyeokgcgyulcery.supabase.co';
+var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4anlsbnllb2tnY2d5dWxjZXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDkwNjcsImV4cCI6MjEwNDEyNTA2N30.rJXecBwmVYu9PcSQs1SaYt9Ik4x57KF7tA-IwKgMaZo';
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+var state = { person:null, loginCode:'', loginError:'', loginBusy:false,
+  screen:'home', draft:null, index:[], recognizingField:null, recognition:null,
   profiles:[], settings:{id:'app',activeProfileId:null,pin:null}, editingProfileId:null,
-  filter:{text:'', dateFrom:'', dateTo:''}, filterOpen:false, locked:false, pinEntry:'', pinError:'' };
+  filter:{text:'', dateFrom:'', dateTo:''}, filterOpen:false, locked:false, pinEntry:'', pinError:'',
+  assessors:[], myAssessors:[], assessorPickBusy:false };
 
 function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
-var DB_NAME='k9fieldlog', DB_VERSION=3, STORE='logs', PROFILE_STORE='profile', SETTINGS_STORE='settings', _dbp=null;
+var DB_NAME='k9fieldlog', DB_VERSION=4, STORE='logs', PROFILE_STORE='profile', SETTINGS_STORE='settings', AUTH_STORE='auth', _dbp=null;
 function openDB(){
   if(_dbp) return _dbp;
   _dbp = new Promise(function(resolve,reject){
@@ -143,6 +150,7 @@ function openDB(){
       if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id'});
       if(!db.objectStoreNames.contains(PROFILE_STORE)) db.createObjectStore(PROFILE_STORE,{keyPath:'id'});
       if(!db.objectStoreNames.contains(SETTINGS_STORE)) db.createObjectStore(SETTINGS_STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(AUTH_STORE)) db.createObjectStore(AUTH_STORE,{keyPath:'id'});
     };
     req.onsuccess = function(){ resolve(req.result); };
     req.onerror = function(){ reject(req.error); };
@@ -229,16 +237,107 @@ async function setActiveProfile(id){
 }
 async function saveSettings(){ await dbPut(SETTINGS_STORE, state.settings); }
 
-async function loadIndex(){
-  var all = await dbGetAll(STORE);
-  state.index = all.map(function(l){
-    return {id:l.id,date:l.date,dog:l.dog,handler:l.handler,location:l.location||'',objective:(l.trainingObjective||'').slice(0,70),status:l.status};
-  }).sort(function(a,b){ return (b.date||'').localeCompare(a.date||'') || b.id.localeCompare(a.id); });
+/* ---------- auth / session (local device remembers who's logged in) ---------- */
+async function loadSession(){
+  var rec = await dbGet(AUTH_STORE, 'session');
+  state.person = rec ? {id:rec.personId, name:rec.name, role:rec.role} : null;
 }
-async function saveLog(log){ await dbPut(STORE, log); await loadIndex(); }
-async function loadLog(id){ return await dbGet(STORE, id); }
-async function removeLog(id){ await dbDelete(STORE, id); await loadIndex(); }
-async function allLogsFull(){ return await dbGetAll(STORE); }
+async function saveSession(person){
+  await dbPut(AUTH_STORE, {id:'session', personId:person.id, name:person.name, role:person.role});
+  state.person = person;
+}
+async function clearSession(){
+  await dbDelete(AUTH_STORE, 'session');
+  state.person = null;
+}
+
+/* ---------- reports (Supabase) ---------- */
+function rowToLog(row){
+  var log = row.data || {};
+  log.id = row.id; log.status = row.status;
+  log.dog = row.dog_name; log.handler = row.handler_name; log.location = row.location; log.date = row.report_date;
+  if(row.signoff) log.trainerSignoff = row.signoff;
+  return log;
+}
+function logToRow(log){
+  return {
+    id: log.id, handler_id: state.person.id,
+    dog_name: log.dog||'', handler_name: log.handler||'', location: log.location||'', report_date: log.date||null,
+    status: log.status, data: log, signoff: log.trainerSignoff||null,
+    updated_at: new Date().toISOString()
+  };
+}
+async function loadIndex(){
+  if(!state.person){ state.index=[]; return; }
+  var q = sb.from('reports').select('id,dog_name,handler_name,location,report_date,status,data');
+  if(state.person.role!=='assessor') q = q.eq('handler_id', state.person.id);
+  var res = await q.order('report_date',{ascending:false});
+  if(res.error){ console.error(res.error); state.index=[]; return; }
+  state.index = (res.data||[]).map(function(r){
+    return {id:r.id,date:r.report_date,dog:r.dog_name,handler:r.handler_name,location:r.location||'',
+      objective:((r.data&&r.data.trainingObjective)||'').slice(0,70),status:r.status};
+  });
+}
+async function saveLog(log){
+  var res = await sb.from('reports').upsert(logToRow(log));
+  if(res.error){ alert('Could not save to the server: '+res.error.message); throw res.error; }
+  await loadIndex();
+}
+async function loadLog(id){
+  var res = await sb.from('reports').select('*').eq('id',id).single();
+  if(res.error){ alert('Could not load that report: '+res.error.message); return null; }
+  return rowToLog(res.data);
+}
+async function removeLog(id){
+  var res = await sb.from('reports').delete().eq('id',id);
+  if(res.error){ alert('Could not delete: '+res.error.message); return; }
+  await loadIndex();
+}
+async function allLogsFull(){
+  var q = sb.from('reports').select('*');
+  if(state.person.role!=='assessor') q = q.eq('handler_id', state.person.id);
+  var res = await q;
+  if(res.error){ alert('Could not export: '+res.error.message); return []; }
+  return (res.data||[]).map(rowToLog);
+}
+
+/* ---------- assessor queue (for assessor role) ---------- */
+async function loadAssessorQueue(){
+  var links = await sb.from('handler_assessor_links').select('handler_id').eq('assessor_id', state.person.id);
+  if(links.error){ console.error(links.error); state.index=[]; return; }
+  var handlerIds = (links.data||[]).map(function(l){return l.handler_id;});
+  if(!handlerIds.length){ state.index=[]; return; }
+  var res = await sb.from('reports').select('id,dog_name,handler_name,location,report_date,status,data')
+    .in('handler_id', handlerIds).in('status',['submitted','signed']).order('report_date',{ascending:false});
+  if(res.error){ console.error(res.error); state.index=[]; return; }
+  state.index = (res.data||[]).map(function(r){
+    return {id:r.id,date:r.report_date,dog:r.dog_name,handler:r.handler_name,location:r.location||'',
+      objective:((r.data&&r.data.trainingObjective)||'').slice(0,70),status:r.status};
+  });
+}
+
+/* ---------- handler's assessors (who can see their reports) ---------- */
+async function loadMyAssessors(){
+  var res = await sb.from('handler_assessor_links').select('assessor_id').eq('handler_id', state.person.id);
+  if(res.error){ state.myAssessors = []; return; }
+  var ids = (res.data||[]).map(function(r){ return r.assessor_id; });
+  await loadAllAssessors();
+  state.myAssessors = state.assessors.filter(function(a){ return ids.indexOf(a.id)>=0; });
+}
+async function loadAllAssessors(){
+  var res = await sb.rpc('list_assessors');
+  state.assessors = res.error ? [] : (res.data||[]);
+}
+async function addMyAssessor(assessorId){
+  var res = await sb.from('handler_assessor_links').insert({handler_id: state.person.id, assessor_id: assessorId});
+  if(res.error){ alert('Could not add assessor: '+res.error.message); return; }
+  await loadMyAssessors();
+}
+async function removeMyAssessor(assessorId){
+  var res = await sb.from('handler_assessor_links').delete().eq('handler_id', state.person.id).eq('assessor_id', assessorId);
+  if(res.error){ alert('Could not remove: '+res.error.message); return; }
+  await loadMyAssessors();
+}
 
 function filteredIndex(){
   var f = state.filter;
@@ -277,12 +376,11 @@ function importLogFile(file){
     try{
       var data = JSON.parse(reader.result);
       if(data && data.type==='k9fieldlog-backup' && Array.isArray(data.logs)){
-        for(var i=0;i<data.logs.length;i++){ await dbPut(STORE, data.logs[i]); }
+        for(var i=0;i<data.logs.length;i++){ await saveLog(data.logs[i]); }
         if(Array.isArray(data.profiles)){
           for(var j=0;j<data.profiles.length;j++){ await dbPut(PROFILE_STORE, data.profiles[j]); }
         }
         await loadAppData();
-        await loadIndex();
         alert('Imported '+data.logs.length+' log(s) from backup.');
         state.screen='home'; render();
         return;
@@ -291,7 +389,7 @@ function importLogFile(file){
       if(!log.id || !log.date){ alert('That file does not look like a Search Dog Log export.'); return; }
       await saveLog(log);
       state.draft = log;
-      state.screen = (state.role==='handler' && log.status==='draft') ? 'edit' : 'view';
+      state.screen = (state.person.role!=='assessor' && log.status==='draft') ? 'edit' : 'view';
       render();
     }catch(e){ alert('Could not read that file. Make sure it is a log or backup exported from this app.'); }
   };
@@ -443,7 +541,7 @@ function newLog(){
   var p = activeProfile() || {};
   return {
     id: uid('log'), status:'draft', type:'individual',
-    handler: p.handlerName || '', dog: p.dogName || '', date:new Date().toISOString().slice(0,10), timeOfDay:'AM',
+    handler: (state.person && state.person.name) || p.handlerName || '', dog: p.dogName || '', date:new Date().toISOString().slice(0,10), timeOfDay:'AM',
     location:'', trainingObjective:'',
     numSubjects:'', trailSize:'', trailAge:'', numTurns:'',
     scentArticle:'', scentArticleType:'na', timeOnTrail:'',
@@ -650,24 +748,30 @@ window.toggleMic = toggleMic;
 
 /* ---------- UI builders ---------- */
 function header(){
+  var roleLabel = state.person ? state.person.role.charAt(0).toUpperCase()+state.person.role.slice(1) : '';
   return '<div class="header"><div class="brand">'+
     '<div style="color:var(--primary)">'+icon('paw',26)+'</div>'+
     '<div class="brand-title">Search Dog Log<span>NSARDA Suffolk</span></div></div>'+
-    '<div style="display:flex;align-items:center;gap:8px;">'+
-    '<div class="role-toggle">'+
-      '<button class="'+(state.role==='handler'?'active':'')+'" onclick="App.setRole(\'handler\')">Handler</button>'+
-      '<button class="'+(state.role==='trainer'?'active':'')+'" onclick="App.setRole(\'trainer\')">Trainer</button>'+
-    '</div>'+
+    '<div style="display:flex;align-items:center;gap:10px;">'+
+    (state.person ? '<div style="text-align:right;line-height:1.2;"><div style="font-size:13px;font-weight:700;">'+esc(state.person.name)+'</div><div style="font-size:10px;color:var(--neutral-dim);text-transform:uppercase;letter-spacing:0.05em;">'+roleLabel+'</div></div>' : '')+
     '<button onclick="App.goSettings()" aria-label="Settings" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon('gear',20)+'</button>'+
     '</div></div>';
 }
 function bottomNav(){
   var scr = state.screen;
-  return '<div class="bottom-nav">'+
-    '<button class="'+(scr==='home'?'active':'')+'" onclick="App.goHome()">'+icon('list',20)+'<span>My logs</span></button>'+
-    '<button class="'+(scr==='edit'&&state.draft&&state.draft.status==='draft'?'active':'')+'" onclick="App.newLogTap()">'+icon('plus',22)+'<span>New log</span></button>'+
-    '<button class="'+(scr==='trainer'?'active':'')+'" onclick="App.goTrainerQueue()">'+icon('check',20)+'<span>Review</span></button>'+
-  '</div>';
+  var role = state.person ? state.person.role : 'handler';
+  var showLogs = role==='handler' || role==='admin';
+  var showReview = role==='assessor' || role==='admin';
+  var html = '<div class="bottom-nav">';
+  if(showLogs){
+    html += '<button class="'+(scr==='home'?'active':'')+'" onclick="App.goHome()">'+icon('list',20)+'<span>My logs</span></button>';
+    html += '<button class="'+(scr==='edit'&&state.draft&&state.draft.status==='draft'?'active':'')+'" onclick="App.newLogTap()">'+icon('plus',22)+'<span>New log</span></button>';
+  }
+  if(showReview){
+    html += '<button class="'+(scr==='trainer'?'active':'')+'" onclick="App.goTrainerQueue()">'+icon('check',20)+'<span>Review</span></button>';
+  }
+  html += '</div>';
+  return html;
 }
 function micRow(fieldId, value, placeholder, label){
   return '<div class="field">'+(label?'<label>'+label+'</label>':'')+
@@ -689,12 +793,14 @@ function profileCard(){
     '</div><div style="color:var(--neutral-dim);">'+icon('chev',18)+'</div></div>';
 }
 
-function logCardHTML(l, badgeClass, badgeText){
+function logCardHTML(l, badgeClass, badgeText, canDelete){
+  var delBtn = canDelete===false ? '' :
+    '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;margin-left:2px;" onclick="event.stopPropagation();App.quickDelete(\''+l.id+'\')" aria-label="Delete log">'+icon('trash',16)+'</button>';
   return '<div class="log-card"><div class="log-main" onclick="App.openLog(\''+l.id+'\')">'+
     '<div class="log-date">'+l.date+(l.dog?' &middot; '+esc(l.dog):'')+'</div>'+
     '<div class="log-obj">'+esc(l.location||'Untitled location')+'</div></div>'+
     '<span class="badge '+badgeClass+'">'+badgeText+'</span>'+
-    '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;margin-left:2px;" onclick="event.stopPropagation();App.quickDelete(\''+l.id+'\')" aria-label="Delete log">'+icon('trash',16)+'</button>'+
+    delBtn+
     '</div>';
 }
 
@@ -734,21 +840,22 @@ function screenHome(){
 function screenTrainerQueue(){
   var pending = state.index.filter(function(l){return l.status==='submitted';});
   var signed = state.index.filter(function(l){return l.status==='signed';});
-  var body = '<h1 class="page-title">Trainer review</h1>';
-  body += '<div class="notice">Logs live on this device only. Ask the handler to send you the log file (export from their phone, then share it to you), then import it below to review and sign.</div>';
-  body += '<label class="upload-btn" style="margin-bottom:14px;">'+icon('map',18)+' Import a log to review<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>';
+  var body = '<h1 class="page-title">Review</h1>';
+  if(!pending.length && !signed.length){
+    body += '<div class="notice">Nothing here yet. Reports appear once a handler has added you as their assessor and submitted a session.</div>';
+  }
   body += '<div class="eyebrow">Awaiting sign-off</div>';
   if(!pending.length) body += '<div class="empty" style="padding:20px;">Nothing waiting for review.</div>';
-  pending.forEach(function(l){ body += logCardHTML(l, 'submitted', 'submitted'); });
+  pending.forEach(function(l){ body += logCardHTML(l, 'submitted', 'submitted', state.person.role==='admin'); });
   if(signed.length){
     body += '<div class="eyebrow" style="margin-top:18px;">Signed off</div>';
-    signed.forEach(function(l){ body += logCardHTML(l, 'signed', 'signed'); });
+    signed.forEach(function(l){ body += logCardHTML(l, 'signed', 'signed', state.person.role==='admin'); });
   }
   return body;
 }
 
 function profileFormCard(p){
-  p = p || {dogName:'', handlerName:'', photo:null};
+  p = p || {dogName:'', handlerName:'', photo:null, insurer:'', insuranceRenewal:'', immunisationDate:'', immunisationPhoto:null};
   return '<div class="card">'+
     '<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">'+
     (p.photo ? '<img src="'+p.photo+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none;">' :
@@ -757,6 +864,18 @@ function profileFormCard(p){
     '</div>'+
     '<label>Dog name</label><input type="text" id="profDogName" value="'+esc(p.dogName)+'">'+
     '<label>Handler name</label><input type="text" id="profHandlerName" value="'+esc(p.handlerName)+'">'+
+    '<div class="eyebrow" style="margin-top:6px;">Insurance</div>'+
+    '<div class="row2">'+
+    '<div><label>Insurer</label><input type="text" id="profInsurer" placeholder="e.g. Petplan" value="'+esc(p.insurer||'')+'"></div>'+
+    '<div><label>Renewal date</label><input type="date" id="profInsuranceRenewal" value="'+esc(p.insuranceRenewal||'')+'"></div>'+
+    '</div>'+
+    '<div class="eyebrow" style="margin-top:6px;">Immunisation</div>'+
+    '<label>Last immunisation date</label><input type="date" id="profImmsDate" value="'+esc(p.immunisationDate||'')+'">'+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">'+
+    (p.immunisationPhoto ? '<img src="'+p.immunisationPhoto+'" style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex:none;border:1px solid var(--line);">' :
+      '<div style="width:56px;height:56px;border-radius:8px;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('camera',20)+'</div>')+
+    '<label class="upload-btn" style="flex:1;padding:10px;">'+icon('camera',16)+' '+(p.immunisationPhoto?'Replace card photo':'Photo of card / evidence')+'<input type="file" accept="image/*" onchange="App.onImmunisationPhoto(event)"></label>'+
+    '</div>'+
     '<div class="btn-row" style="margin-top:6px;">'+
     '<button class="btn btn-secondary" onclick="App.cancelEditProfile()">Cancel</button>'+
     '<button class="btn btn-primary" onclick="App.saveProfileForm()">Save</button></div>'+
@@ -781,7 +900,10 @@ function screenProfiles(){
           '<div style="width:48px;height:48px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',22)+'</div>')+
         '<div style="flex:1;min-width:0;" onclick="App.editExistingProfile(\''+p.id+'\')">'+
         '<div style="font-weight:700;">'+esc(p.dogName||'Unnamed')+(isActive?' <span style="color:var(--primary);font-size:11px;font-weight:700;">&middot; ACTIVE</span>':'')+'</div>'+
-        '<div style="font-size:13px;color:var(--neutral-dim);">'+esc(p.handlerName||'')+'</div></div>'+
+        '<div style="font-size:13px;color:var(--neutral-dim);">'+esc(p.handlerName||'')+'</div>'+
+        (p.insuranceRenewal ? '<div style="font-size:11px;color:var(--neutral-dim);margin-top:2px;">Insurance renews '+p.insuranceRenewal+(p.insurer?' &middot; '+esc(p.insurer):'')+'</div>' : '')+
+        (p.immunisationDate ? '<div style="font-size:11px;color:var(--neutral-dim);">Imms '+p.immunisationDate+'</div>' : '')+
+        '</div>'+
         (!isActive?'<button class="btn btn-secondary" style="width:auto;padding:8px 12px;font-size:12px;" onclick="App.setActive(\''+p.id+'\')">Use</button>':'')+
         '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer;" onclick="App.removeProfile(\''+p.id+'\')" aria-label="Delete profile">'+icon('trash',16)+'</button>'+
         '</div>';
@@ -795,8 +917,19 @@ function screenSettings(){
   var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
   body += '<h1 class="page-title">Settings</h1>';
 
-  body += '<div class="card" style="cursor:pointer;" onclick="App.goProfiles()"><div style="display:flex;justify-content:space-between;align-items:center;">'+
-    '<div><div style="font-weight:700;">Dog profiles</div><div style="font-size:13px;color:var(--neutral-dim);">'+state.profiles.length+' set up</div></div>'+icon('chev',18)+'</div></div>';
+  body += '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">'+
+    '<div><div style="font-weight:700;">'+esc(state.person.name)+'</div>'+
+    '<div style="font-size:13px;color:var(--neutral-dim);text-transform:capitalize;">'+esc(state.person.role)+'</div></div>'+
+    '<button class="btn btn-secondary" style="width:auto;padding:8px 14px;font-size:13px;" onclick="App.logout()">Log out</button>'+
+    '</div></div>';
+
+  if(state.person.role!=='assessor'){
+    body += '<div class="card" style="cursor:pointer;" onclick="App.goProfiles()"><div style="display:flex;justify-content:space-between;align-items:center;">'+
+      '<div><div style="font-weight:700;">Dog profiles</div><div style="font-size:13px;color:var(--neutral-dim);">'+state.profiles.length+' set up</div></div>'+icon('chev',18)+'</div></div>';
+
+    body += '<div class="card" style="cursor:pointer;" onclick="App.goAssessors()"><div style="display:flex;justify-content:space-between;align-items:center;">'+
+      '<div><div style="font-weight:700;">My assessors</div><div style="font-size:13px;color:var(--neutral-dim);">Who can see and sign off your reports</div></div>'+icon('chev',18)+'</div></div>';
+  }
 
   body += '<div class="card">'+
     '<div class="readonly-label" style="margin-bottom:8px;">'+icon('lock',14)+' App lock</div>';
@@ -813,11 +946,42 @@ function screenSettings(){
 
   body += '<div class="card">'+
     '<div class="readonly-label" style="margin-bottom:8px;">Backup</div>'+
-    '<div style="font-size:14px;margin-bottom:10px;color:var(--neutral-dim);">Export every log on this device as one file, separate from sharing individual logs.</div>'+
+    '<div style="font-size:14px;margin-bottom:10px;color:var(--neutral-dim);">Download every report you can see as one file \u2014 separate from the live cloud copy, useful as an offline backup.</div>'+
     '<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="App.exportAll()">Export all logs</button>'+
     '<label class="upload-btn">'+icon('map',18)+' Import a backup file<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>'+
     '</div>';
 
+  return body;
+}
+
+function screenAssessors(){
+  var body = '<div class="top-back" onclick="App.goSettings()">'+icon('back',16)+' Back to settings</div>';
+  body += '<h1 class="page-title">My assessors</h1>';
+  body += '<div class="notice">Anyone added here can see your submitted reports and sign them off.</div>';
+
+  if(!state.myAssessors.length){
+    body += '<div class="empty" style="padding:20px;">No assessors added yet.</div>';
+  } else {
+    state.myAssessors.forEach(function(a){
+      body += '<div class="card" style="display:flex;justify-content:space-between;align-items:center;">'+
+        '<div style="font-weight:600;">'+esc(a.name)+'</div>'+
+        '<button class="btn btn-danger" style="width:auto;padding:8px 12px;font-size:12px;" onclick="App.removeAssessor(\''+a.id+'\')">Remove</button>'+
+        '</div>';
+    });
+  }
+
+  var available = state.assessors.filter(function(a){ return !state.myAssessors.some(function(m){return m.id===a.id;}); });
+  body += '<div class="card">'+
+    '<div class="readonly-label" style="margin-bottom:8px;">Add an assessor</div>';
+  if(!available.length){
+    body += '<div style="font-size:13px;color:var(--neutral-dim);">No more assessors available to add.</div>';
+  } else {
+    body += '<select id="addAssessorSelect" style="margin-bottom:12px;">'+
+      available.map(function(a){ return '<option value="'+a.id+'">'+esc(a.name)+'</option>'; }).join('')+
+      '</select>'+
+      '<button class="btn btn-primary" onclick="App.addAssessorTap()">Add</button>';
+  }
+  body += '</div>';
   return body;
 }
 
@@ -897,9 +1061,9 @@ function screenEdit(){
   ]);
 
   body += section('Photos', false, [
-    (d.photos||[]).length < 3 ?
-      '<label class="upload-btn">'+icon('camera',18)+' Upload photos (up to 3)<input type="file" accept="image/*" multiple onchange="App.onPhotos(event)"></label>' :
-      '<div class="notice">Maximum of 3 photos reached. Remove one to add another.</div>',
+    (d.photos||[]).length < 6 ?
+      '<label class="upload-btn">'+icon('camera',18)+' Upload photos (up to 6)<input type="file" accept="image/*" multiple onchange="App.onPhotos(event)"></label>' :
+      '<div class="notice">Maximum of 6 photos reached. Remove one to add another.</div>',
     '<div class="thumbs" id="thumbGrid">'+ (d.photos||[]).map(function(p){
       return '<div class="thumb"><img src="'+p.dataUrl+'"><button class="rm" onclick="App.removePhoto(\''+p.id+'\')">'+icon('x',12)+'</button></div>';
     }).join('') +'</div>'
@@ -978,21 +1142,23 @@ function screenView(){
       (d.trainerSignoff.notes?'<div class="readonly-field">'+esc(d.trainerSignoff.notes)+'</div>':'')+
       '<img src="'+d.trainerSignoff.signatureDataUrl+'" style="background:var(--secondary);border-radius:8px;max-width:220px;">'+
       '</div>';
-  } else if(state.role==='trainer' && d.status==='submitted'){
+  } else if((state.person.role==='assessor'||state.person.role==='admin') && d.status==='submitted'){
     body += '<div class="card">'+
-      '<div class="readonly-label">Trainer sign-off</div>'+
-      '<label>Add / edit trainer notes</label>'+micRow('trainerSignoffNotes', d._signoffNotes||'', 'Additional review notes...', null)+
+      '<div class="readonly-label">Assessor sign-off</div>'+
+      '<label>Add / edit assessor notes</label>'+micRow('trainerSignoffNotes', d._signoffNotes||'', 'Additional review notes...', null)+
       '<div class="check-row"><input type="checkbox" id="toReview"><label style="margin:0;" for="toReview">Training officer review</label></div>'+
-      '<label>Trainer name</label><input type="text" id="trainerName" placeholder="Full name">'+
+      '<label>Assessor name</label><input type="text" id="trainerName" placeholder="Full name" value="'+esc(state.person.name)+'">'+
       '<label>Signature</label><canvas id="sigCanvas" width="440" height="130"></canvas>'+
       '<div class="btn-row" style="margin-top:10px;">'+
       '<button class="btn btn-secondary" onclick="App.clearSignature()">Clear</button>'+
       '<button class="btn btn-primary" onclick="App.signOff()">Sign &amp; submit</button></div>'+
       '</div>';
-  } else if(state.role==='handler' && d.status==='draft'){
+  } else if(state.person.role!=='assessor' && d.status==='draft'){
     body += '<button class="btn btn-primary" onclick="App.editCurrentDraft()">Continue editing</button>';
   }
-  body += '<button class="btn btn-danger" style="margin-top:14px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
+  if(state.person.role!=='assessor'){
+    body += '<button class="btn btn-danger" style="margin-top:14px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
+  }
   return body;
 }
 function roField(label,val){
@@ -1002,6 +1168,11 @@ function roField(label,val){
 
 /* ---------- render / lifecycle ---------- */
 function render(){
+  if(!state.person){
+    document.getElementById('app').innerHTML = loginScreenHTML();
+    setTimeout(function(){ var el=document.getElementById('codeInput'); if(el) el.focus(); },30);
+    return;
+  }
   if(state.locked){
     document.getElementById('app').innerHTML = lockScreenHTML();
     setTimeout(function(){ var el=document.getElementById('pinInput'); if(el) el.focus(); },30);
@@ -1014,12 +1185,27 @@ function render(){
   else if(state.screen==='view') html += '<div class="main">'+screenView()+'</div>';
   else if(state.screen==='settings') html += '<div class="main">'+screenSettings()+'</div>';
   else if(state.screen==='profiles') html += '<div class="main">'+screenProfiles()+'</div>';
+  else if(state.screen==='assessors') html += '<div class="main">'+screenAssessors()+'</div>';
   html += bottomNav();
   document.getElementById('app').innerHTML = html;
   refreshMicButtons();
   if(state.screen==='edit' && state.draft && state.draft.gpx) setTimeout(function(){renderMap('gpxMap', state.draft.gpx);},30);
   if(state.screen==='view' && state.draft && state.draft.gpx) setTimeout(function(){renderMap('gpxMapView', state.draft.gpx);},30);
   if(state.screen==='view') setTimeout(setupSignaturePad,30);
+}
+
+function loginScreenHTML(){
+  return '<div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;">'+
+    '<div style="color:var(--primary);margin-bottom:14px;">'+icon('paw',40)+'</div>'+
+    '<div style="font-weight:800;font-size:19px;margin-bottom:2px;">Search Dog Log</div>'+
+    '<div style="font-size:12px;color:var(--neutral-dim);margin-bottom:22px;letter-spacing:0.05em;text-transform:uppercase;">NSARDA Suffolk</div>'+
+    '<div style="font-size:13px;color:var(--neutral-dim);margin-bottom:16px;">Enter the access code you were given</div>'+
+    '<input type="text" id="codeInput" placeholder="Access code" autocapitalize="characters" '+
+      'onkeydown="if(event.key===\'Enter\')App.attemptLogin()" '+
+      'style="text-align:center;font-size:18px;letter-spacing:2px;max-width:220px;text-transform:uppercase;">'+
+    (state.loginError?'<div style="color:var(--danger);font-size:13px;margin-top:6px;">'+esc(state.loginError)+'</div>':'')+
+    '<button class="btn btn-primary" style="max-width:220px;margin-top:14px;" onclick="App.attemptLogin()" '+(state.loginBusy?'disabled':'')+'>'+(state.loginBusy?'Checking...':'Log in')+'</button>'+
+    '</div>';
 }
 
 function setupSignaturePad(){
@@ -1042,15 +1228,44 @@ function setupSignaturePad(){
 
 /* ---------- App controller ---------- */
 window.App = {
-  setRole: function(r){ state.role = r; state.screen='home'; render(); },
-  goHome: function(){ state.screen='home'; render(); },
-  goTrainerQueue: function(){ state.screen='trainer'; render(); },
+  attemptLogin: async function(){
+    var el = document.getElementById('codeInput');
+    var code = el ? el.value.trim() : '';
+    if(!code){ state.loginError='Enter your access code'; render(); return; }
+    state.loginBusy = true; state.loginError=''; render();
+    try{
+      var res = await sb.rpc('login_with_code', {code: code});
+      state.loginBusy = false;
+      if(res.error || !res.data || !res.data.length){
+        state.loginError = 'Code not recognised. Check with your admin.';
+        render();
+        return;
+      }
+      var person = res.data[0];
+      await saveSession(person);
+      state.loginError=''; state.screen = person.role==='assessor' ? 'trainer' : 'home';
+      render();
+      await bootAfterLogin();
+    }catch(e){
+      state.loginBusy = false;
+      state.loginError = 'Could not reach the server. Check your connection.';
+      render();
+    }
+  },
+  logout: async function(){
+    if(!confirm('Log out? You will need your access code to log back in.')) return;
+    await clearSession();
+    state.screen='home'; state.index=[]; state.draft=null;
+    render();
+  },
+  goHome: async function(){ state.screen='home'; render(); await loadIndex(); render(); },
+  goTrainerQueue: async function(){ state.screen='trainer'; render(); await loadAssessorQueue(); render(); },
   newLogTap: function(){ state.draft = newLog(); state.screen='edit'; render(); },
   openLog: async function(id){
     var log = await loadLog(id);
     if(!log) return;
     state.draft = log;
-    state.screen = (state.role==='handler' && log.status==='draft') ? 'edit' : 'view';
+    state.screen = (state.person.role!=='assessor' && log.status==='draft') ? 'edit' : 'view';
     render();
   },
   editCurrentDraft: function(){ state.screen='edit'; render(); },
@@ -1058,7 +1273,7 @@ window.App = {
   setWeatherField: function(key,val){ state.draft.weather[key]=val; render(); },
   fetchWeather: function(){ fetchWeather(); },
   onPhotos: function(e){
-    var remaining = 3 - (state.draft.photos||[]).length;
+    var remaining = 6 - (state.draft.photos||[]).length;
     var files = Array.from(e.target.files||[]).slice(0, Math.max(0,remaining));
     if(!files.length){ render(); return; }
     Promise.all(files.map(compressImage)).then(function(urls){
@@ -1081,13 +1296,13 @@ window.App = {
   },
   saveDraft: async function(){
     state.draft.status='draft';
-    await saveLog(state.draft);
-    state.screen='home'; render();
+    try{ await saveLog(state.draft); state.screen='home'; }catch(e){}
+    render();
   },
   submitForReview: async function(){
     state.draft.status='submitted';
-    await saveLog(state.draft);
-    state.screen='home'; render();
+    try{ await saveLog(state.draft); state.screen='home'; }catch(e){}
+    render();
   },
   deleteCurrentLog: async function(){
     if(!confirm('Delete this log? This cannot be undone.')) return;
@@ -1098,7 +1313,23 @@ window.App = {
 
   goSettings: function(){ state.screen='settings'; render(); },
   goProfiles: function(){ state.editingProfileId=null; state.screen='profiles'; render(); },
-  newProfile: function(){ state.editingProfileId='new'; state._newProfileDraft={dogName:'',handlerName:'',photo:null}; render(); },
+  goAssessors: async function(){
+    state.screen='assessors'; render();
+    await loadMyAssessors();
+    render();
+  },
+  addAssessorTap: async function(){
+    var sel = document.getElementById('addAssessorSelect');
+    if(!sel || !sel.value) return;
+    await addMyAssessor(sel.value);
+    render();
+  },
+  removeAssessor: async function(id){
+    if(!confirm('Remove this assessor? They will no longer be able to see your reports.')) return;
+    await removeMyAssessor(id);
+    render();
+  },
+  newProfile: function(){ state.editingProfileId='new'; state._newProfileDraft={dogName:'',handlerName:'',photo:null,insurer:'',insuranceRenewal:'',immunisationDate:'',immunisationPhoto:null}; render(); },
   editExistingProfile: function(id){ state.editingProfileId=id; render(); },
   cancelEditProfile: function(){ state.editingProfileId=null; state._newProfileDraft=null; render(); },
   onProfilePhoto: function(e){
@@ -1113,13 +1344,30 @@ window.App = {
       render();
     });
   },
+  onImmunisationPhoto: function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    compressImage(file, 800).then(function(url){
+      if(state.editingProfileId==='new'){ state._newProfileDraft.immunisationPhoto = url; }
+      else {
+        var p = state.profiles.find(function(x){return x.id===state.editingProfileId;});
+        if(p) p.immunisationPhoto = url;
+      }
+      render();
+    });
+  },
   saveProfileForm: async function(){
     var dogName = document.getElementById('profDogName').value.trim();
     var handlerName = document.getElementById('profHandlerName').value.trim();
+    var insurer = document.getElementById('profInsurer').value.trim();
+    var insuranceRenewal = document.getElementById('profInsuranceRenewal').value;
+    var immunisationDate = document.getElementById('profImmsDate').value;
     var p;
     if(state.editingProfileId==='new'){ p = state._newProfileDraft || {}; }
     else { p = state.profiles.find(function(x){return x.id===state.editingProfileId;}) || {}; }
     p.dogName = dogName; p.handlerName = handlerName;
+    p.insurer = insurer; p.insuranceRenewal = insuranceRenewal;
+    p.immunisationDate = immunisationDate;
     await saveProfile(p);
     state.editingProfileId = null; state._newProfileDraft = null;
     render();
@@ -1175,7 +1423,9 @@ window.App = {
   downloadPDF: function(){ if(state.draft) downloadLogPDF(state.draft); },
   quickDelete: async function(id){
     if(!confirm('Delete this log? This cannot be undone.')) return;
-    await removeLog(id);
+    var res = await sb.from('reports').delete().eq('id',id);
+    if(res.error){ alert('Could not delete: '+res.error.message); return; }
+    if(state.screen==='trainer') await loadAssessorQueue(); else await loadIndex();
     render();
   },
   onImport: function(e){
@@ -1198,17 +1448,33 @@ window.App = {
       notes: notesEl ? notesEl.value : ''
     };
     state.draft.status = 'signed';
-    await saveLog(state.draft);
-    state.screen='home'; render();
+    try{
+      await saveLog(state.draft);
+      state.screen = state.person.role==='assessor' ? 'trainer' : 'home';
+      if(state.screen==='trainer') await loadAssessorQueue();
+    }catch(e){}
+    render();
   }
 };
 
 /* ---------- boot ---------- */
-(async function boot(){
-  document.getElementById('app').innerHTML = '<div class="main" style="padding-top:40px;text-align:center;color:var(--neutral-dim);">Loading logs...</div>';
+async function bootAfterLogin(){
   await loadAppData();
-  await loadIndex();
+  if(state.person.role==='assessor'){ await loadAssessorQueue(); }
+  else { await loadIndex(); await loadAllAssessors(); }
   render();
+}
+
+(async function boot(){
+  document.getElementById('app').innerHTML = '<div class="main" style="padding-top:40px;text-align:center;color:var(--neutral-dim);">Loading...</div>';
+  await loadSession();
+  if(state.person){
+    if(state.person.role==='assessor' && state.screen==='home') state.screen='trainer';
+    render();
+    await bootAfterLogin();
+  } else {
+    render();
+  }
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(function(){});
   }
