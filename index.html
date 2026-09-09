@@ -98,6 +98,8 @@ details.section .section-body{padding:4px 16px 16px;}
 .empty svg{margin-bottom:12px;opacity:0.6;}
 .thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}
 .thumb{position:relative;width:78px;height:78px;border-radius:9px;overflow:hidden;border:1px solid var(--line);}
+.upload-track{background:var(--secondary-lighter);border-radius:6px;overflow:hidden;height:6px;margin-top:8px;}
+.upload-fill{height:100%;background:var(--primary);transition:width .2s ease;}
 .thumb img{width:100%;height:100%;object-fit:cover;}
 .thumb .rm{position:absolute;top:3px;right:3px;background:rgba(0,0,0,0.55);border:none;color:#fff;width:20px;height:20px;
   border-radius:50%;font-size:12px;line-height:1;cursor:pointer;}
@@ -141,7 +143,7 @@ var state = { person:null, loginCode:'', loginError:'', loginBusy:false,
   screen:'home', draft:null, index:[], recognizingField:null, recognition:null,
   profiles:[], settings:{id:'app',activeProfileId:null,pin:null}, editingProfileId:null,
   filter:{text:'', dateFrom:'', dateTo:''}, filterOpen:false, locked:false, pinEntry:'', pinError:'',
-  assessors:[], myAssessors:[], assessorPickBusy:false };
+  assessors:[], myAssessors:[], assessorPickBusy:false, _uploadProgress:{} };
 
 function uid(p){ return p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -316,19 +318,52 @@ async function enqueueMedia(reportId, kind, targetId, blob, path){
 }
 async function uploadQueuedItem(item){
   item.status='uploading'; await dbPut(QUEUE_STORE, item);
-  var res = await sb.storage.from(MEDIA_BUCKET).upload(item.path, item.blob, {upsert:true, contentType: item.blob.type||'image/jpeg'});
-  if(res.error){
+  try{
+    await storageUploadXHR(item.path, item.blob, function(pct){
+      state._uploadProgress[item.targetId] = pct;
+      throttledRender();
+    });
+  }catch(err){
     item.attempts=(item.attempts||0)+1;
     item.status='failed';
-    item.lastError = res.error.message||String(res.error);
+    item.lastError = err.message||String(err);
     item.nextAttempt = Date.now()+backoffMs(item.attempts);
+    delete state._uploadProgress[item.targetId];
     await dbPut(QUEUE_STORE, item);
-    throw res.error;
+    throw err;
   }
+  delete state._uploadProgress[item.targetId];
   var pub = sb.storage.from(MEDIA_BUCKET).getPublicUrl(item.path);
   item.status='done';
   await dbPut(QUEUE_STORE, item);
   return pub.data.publicUrl;
+}
+/* raw XHR upload (rather than the Supabase SDK's fetch-based one) purely so we get
+   real upload progress events for the on-screen percentage */
+function storageUploadXHR(path, blob, onProgress){
+  return new Promise(function(resolve, reject){
+    var xhr = new XMLHttpRequest();
+    var url = SUPABASE_URL+'/storage/v1/object/'+MEDIA_BUCKET+'/'+path.split('/').map(encodeURIComponent).join('/');
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Authorization', 'Bearer '+SUPABASE_ANON_KEY);
+    xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
+    xhr.setRequestHeader('x-upsert', 'true');
+    xhr.setRequestHeader('Content-Type', blob.type||'application/octet-stream');
+    xhr.upload.onprogress = function(e){
+      if(e.lengthComputable && onProgress) onProgress(Math.round((e.loaded/e.total)*100));
+    };
+    xhr.onload = function(){
+      if(xhr.status>=200 && xhr.status<300){ if(onProgress) onProgress(100); resolve(); }
+      else reject(new Error('Upload failed (status '+xhr.status+')'));
+    };
+    xhr.onerror = function(){ reject(new Error('Network error during upload')); };
+    xhr.send(blob);
+  });
+}
+var _lastProgressRender = 0;
+function throttledRender(){
+  var now = Date.now();
+  if(now-_lastProgressRender>250){ _lastProgressRender=now; render(); }
 }
 async function attachMediaUrl(reportId, kind, targetId, url){
   var arrKey = kind==='video' ? 'videos' : 'photos';
@@ -1172,10 +1207,12 @@ function screenEdit(){
       '<div class="notice">Maximum of 6 photos reached. Remove one to add another.</div>',
     '<div class="thumbs" id="thumbGrid">'+ (d.photos||[]).map(function(p){
       var st = p.uploadStatus||'done';
+      var pct = state._uploadProgress[p.id];
       var dot = st==='done' ? '#3B6D11' : st==='failed' ? '#993C1D' : '#854F0B';
-      var label = st==='done' ? 'Synced' : st==='failed' ? 'Tap to retry' : 'Uploading\u2026';
+      var label = st==='done' ? 'Synced' : st==='failed' ? 'Tap to retry' : (pct!=null ? pct+'%' : 'Uploading\u2026');
       return '<div class="thumb"><img src="'+(p.url||p.dataUrl)+'">'+
         '<span title="'+label+'" onclick="'+(st==='failed'?'App.retryFailedUploads()':'')+'" style="position:absolute;left:6px;bottom:6px;width:9px;height:9px;border-radius:50%;background:'+dot+';border:1.5px solid #fff;"></span>'+
+        (st==='uploading'?'<span style="position:absolute;right:4px;bottom:4px;font-size:9px;background:rgba(0,0,0,.6);color:#fff;padding:1px 4px;border-radius:4px;">'+(pct!=null?pct+'%':'\u2026')+'</span>':'')+
         '<button class="rm" onclick="App.removePhoto(\''+p.id+'\')">'+icon('x',12)+'</button></div>';
     }).join('') +'</div>'
   ]);
@@ -1186,15 +1223,17 @@ function screenEdit(){
       '<div class="notice">Maximum of 3 videos reached. Remove one to add another.</div>',
     (d.videos||[]).map(function(v){
       var st = v.uploadStatus||'done';
+      var pct = state._uploadProgress[v.id];
       var dot = st==='done' ? '#3B6D11' : st==='failed' ? '#993C1D' : '#854F0B';
-      var label = st==='done' ? 'Synced' : st==='failed' ? 'Upload failed \u2014 tap to retry' : 'Uploading\u2026';
+      var label = st==='done' ? 'Synced' : st==='failed' ? 'Upload failed \u2014 tap to retry' : (pct!=null ? 'Uploading\u2026 '+pct+'%' : 'Uploading\u2026');
       return '<div class="card" style="margin-top:10px;">'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'+
         '<span style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex:none;" title="'+label+'"></span>'+
         '<div style="flex:1;font-size:13px;">'+esc(v.name||'Video')+'</div>'+
         (st==='failed'?'<button class="btn btn-secondary" style="padding:4px 10px;" onclick="App.retryFailedUploads()">Retry</button>':'')+
         '<button class="rm" style="position:static;" onclick="App.removeVideo(\''+v.id+'\')">'+icon('x',12)+'</button></div>'+
-        (v.url ? '<video controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>' : '<div class="notice">'+label+'</div>')+
+        (v.url ? '<video controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>' :
+          '<div class="notice">'+label+'</div>'+(st==='uploading'?'<div class="upload-track"><div class="upload-fill" style="width:'+(pct||0)+'%;"></div></div>':''))+
         '</div>';
     }).join('')
   ]);
@@ -1262,7 +1301,14 @@ function screenView(){
   }
   if(d.videos && d.videos.length){
     body += '<div class="card"><div class="readonly-label">Videos</div>' + d.videos.map(function(v){
-      if(!v.url) return '<div class="notice">'+esc(v.name||'Video')+' \u2014 still uploading, will appear once synced.</div>';
+      if(!v.url){
+        var pct = state._uploadProgress[v.id];
+        var st = v.uploadStatus||'queued';
+        var label = st==='failed' ? 'Upload failed \u2014 tap to retry' : (pct!=null ? 'Uploading\u2026 '+pct+'%' : 'Still uploading, will appear once synced.');
+        return '<div class="notice">'+esc(v.name||'Video')+' \u2014 '+label+'</div>'+
+          (st==='uploading'?'<div class="upload-track"><div class="upload-fill" style="width:'+(pct||0)+'%;"></div></div>':'')+
+          (st==='failed'?'<button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;" onclick="App.retryFailedUploads()">Retry</button>':'');
+      }
       var canNote = (d.status==='submitted'||d.status==='changes_requested');
       return '<div style="margin-bottom:14px;"><video id="vid_'+v.id+'" controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>'+
         (canNote ? '<button class="btn btn-secondary" style="margin-top:6px;padding:6px 10px;font-size:13px;" onclick="App.noteAtCurrentTime(\''+v.id+'\')">Add note at this point</button>' : '')+
