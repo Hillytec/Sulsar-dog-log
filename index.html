@@ -94,6 +94,9 @@ details.section .section-body{padding:4px 16px 16px;}
 .thread .who{font-size:11px;color:var(--neutral-dim);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px;}
 .thread .ts-link{color:var(--primary);cursor:pointer;font-weight:700;}
 .thread .body{font-size:14px;line-height:1.4;}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+.chips button{border:1px solid var(--line);background:var(--secondary);color:var(--neutral-dim);border-radius:999px;padding:5px 12px;font-size:12px;}
+.chips button.active{background:var(--primary);border-color:var(--primary);color:#fff;}
 .empty{text-align:center;padding:50px 20px;color:var(--neutral-dim);}
 .empty svg{margin-bottom:12px;opacity:0.6;}
 .thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;}
@@ -410,10 +413,36 @@ if(typeof window!=='undefined'){
   window.addEventListener('online', syncQueue);
   setInterval(syncQueue, 20000);
 }
+/* pick up video / AI-draft notes written by the video-review page while this tab
+   was in the background \u2014 no extra tap needed */
+async function refreshMediaFromServer(){
+  if(!(state.draft && (state.screen==='edit'||state.screen==='view'))) return;
+  try{
+    var fresh = await loadLogQuiet(state.draft.id);
+    if(fresh){
+      state.draft.videos = fresh.videos || state.draft.videos;
+      state.draft.nsarda = fresh.nsarda || state.draft.nsarda;
+      state.draft.comments = fresh.comments || state.draft.comments;
+      await dbPut(STORE, state.draft);
+      render();
+    }
+  }catch(e){}
+}
+if(typeof document!=='undefined'){
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') refreshMediaFromServer(); });
+  window.addEventListener('focus', refreshMediaFromServer);
+}
 async function loadLog(id){
   var res = await sb.from('reports').select('*').eq('id',id).single();
   if(res.error){ alert('Could not load that report: '+res.error.message); return null; }
   return rowToLog(res.data);
+}
+async function loadLogQuiet(id){
+  try{
+    var res = await sb.from('reports').select('*').eq('id',id).single();
+    if(res.error) return null;
+    return rowToLog(res.data);
+  }catch(e){ return null; }
 }
 async function removeLog(id){
   var res = await sb.from('reports').delete().eq('id',id);
@@ -679,6 +708,10 @@ function newLog(){
     trainerComments:'', handlerComments:'', goingForward:'',
     reward:'', ftr:'',
     photos:[], videos:[], comments:[], gpx:null,
+    nsarda: { discipline:'', gradingTerrain:'', gradingLevel:'',
+      scores:{dogRanging:'',dogHunting:'',handlerDirection:'',handlerCoverage:'',handlerReading:''},
+      aiDraft:{}, bodies:[], areaType:'', windCond:[], weather:[], temperature:[], terrain:[],
+      timings:{start:'',finish:'',totalHr:'',totalMin:''}, additionalInfo:'', outcome:'' },
     objectivesMet:'', anyOtherComments:'',
     trainerSignoff:null
   };
@@ -1218,24 +1251,18 @@ function screenEdit(){
   ]);
 
   body += section('Videos', false, [
-    (d.videos||[]).length < 3 ?
-      '<label class="upload-btn">'+icon('camera',18)+' Upload video (up to 3)<input type="file" accept="video/*" onchange="App.onVideo(event)"></label>' :
-      '<div class="notice">Maximum of 3 videos reached. Remove one to add another.</div>',
-    (d.videos||[]).map(function(v){
-      var st = v.uploadStatus||'done';
-      var pct = state._uploadProgress[v.id];
-      var dot = st==='done' ? '#3B6D11' : st==='failed' ? '#993C1D' : '#854F0B';
-      var label = st==='done' ? 'Synced' : st==='failed' ? 'Upload failed \u2014 tap to retry' : (pct!=null ? 'Uploading\u2026 '+pct+'%' : 'Uploading\u2026');
-      return '<div class="card" style="margin-top:10px;">'+
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'+
-        '<span style="width:9px;height:9px;border-radius:50%;background:'+dot+';flex:none;" title="'+label+'"></span>'+
-        '<div style="flex:1;font-size:13px;">'+esc(v.name||'Video')+'</div>'+
-        (st==='failed'?'<button class="btn btn-secondary" style="padding:4px 10px;" onclick="App.retryFailedUploads()">Retry</button>':'')+
-        '<button class="rm" style="position:static;" onclick="App.removeVideo(\''+v.id+'\')">'+icon('x',12)+'</button></div>'+
-        (v.url ? '<video controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>' :
-          '<div class="notice">'+label+'</div>'+(st==='uploading'?'<div class="upload-track"><div class="upload-fill" style="width:'+(pct||0)+'%;"></div></div>':''))+
-        '</div>';
-    }).join('')
+    '<p style="font-size:13px;color:var(--neutral-dim);margin:0 0 10px;">Video upload happens on a dedicated page \u2014 it\'ll appear here automatically once it\'s done.</p>',
+    '<button type="button" class="btn btn-primary" style="width:100%;" onclick="App.openVideoPage()">Upload / review video &rarr;</button>',
+    (d.videos||[]).length ? (d.videos||[]).map(function(v){
+      return v.url ?
+        ('<div class="card" style="margin-top:10px;">'+
+          '<video controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>'+
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">'+
+          '<span style="font-size:12px;color:var(--neutral-dim);">'+esc(v.name||'Video')+'</span>'+
+          '<button class="btn btn-secondary" style="padding:3px 10px;font-size:12px;" onclick="App.removeVideoRef(\''+v.id+'\')">Remove</button>'+
+          '</div></div>') :
+        '<div class="notice" style="margin-top:10px;">'+esc(v.name||'Video')+' \u2014 still processing on the video page.</div>';
+    }).join('') : ''
   ]);
 
   body += section('GPX map / mapping', false, [
@@ -1301,20 +1328,15 @@ function screenView(){
   }
   if(d.videos && d.videos.length){
     body += '<div class="card"><div class="readonly-label">Videos</div>' + d.videos.map(function(v){
-      if(!v.url){
-        var pct = state._uploadProgress[v.id];
-        var st = v.uploadStatus||'queued';
-        var label = st==='failed' ? 'Upload failed \u2014 tap to retry' : (pct!=null ? 'Uploading\u2026 '+pct+'%' : 'Still uploading, will appear once synced.');
-        return '<div class="notice">'+esc(v.name||'Video')+' \u2014 '+label+'</div>'+
-          (st==='uploading'?'<div class="upload-track"><div class="upload-fill" style="width:'+(pct||0)+'%;"></div></div>':'')+
-          (st==='failed'?'<button class="btn btn-secondary" style="margin-top:6px;padding:4px 10px;" onclick="App.retryFailedUploads()">Retry</button>':'');
-      }
+      if(!v.url) return '<div class="notice">'+esc(v.name||'Video')+' \u2014 not yet available (upload it on the video page).</div>';
       var canNote = (d.status==='submitted'||d.status==='changes_requested');
       return '<div style="margin-bottom:14px;"><video id="vid_'+v.id+'" controls preload="metadata" style="width:100%;border-radius:8px;" src="'+v.url+'"></video>'+
         (canNote ? '<button class="btn btn-secondary" style="margin-top:6px;padding:6px 10px;font-size:13px;" onclick="App.noteAtCurrentTime(\''+v.id+'\')">Add note at this point</button>' : '')+
         '</div>';
     }).join('') + '</div>';
   }
+  if(!((state.person.role==='assessor'||state.person.role==='admin') && d.status==='submitted') && hasNsardaData(d.nsarda)){ body += nsardaFormHTML(d, false); }
+
   if(d.status!=='draft'){ body += commentsSection(d); }
   body += roField('Trainer comments', d.trainerComments);
   body += roField('Handler comments', d.handlerComments);
@@ -1329,6 +1351,7 @@ function screenView(){
       '<img src="'+d.trainerSignoff.signatureDataUrl+'" style="background:var(--secondary);border-radius:8px;max-width:220px;">'+
       '</div>';
   } else if((state.person.role==='assessor'||state.person.role==='admin') && d.status==='submitted'){
+    body += nsardaFormHTML(d, true);
     body += '<div class="card">'+
       '<div class="readonly-label">Assessor sign-off</div>'+
       '<label>Add / edit assessor notes</label>'+micRow('trainerSignoffNotes', d._signoffNotes||'', 'Additional review notes...', null)+
@@ -1338,6 +1361,7 @@ function screenView(){
       '<div class="btn-row" style="margin-top:10px;">'+
       '<button class="btn btn-secondary" onclick="App.clearSignature()">Clear</button>'+
       '<button class="btn btn-primary" onclick="App.signOff()">Sign &amp; submit</button></div>'+
+      '<button class="btn btn-secondary" style="margin-top:8px;width:100%;" onclick="App.saveAssessorProgress()">Save progress (don\'t sign off yet)</button>'+
       '<button class="btn btn-secondary" style="margin-top:8px;width:100%;" onclick="App.requestChanges()">Request changes instead</button>'+
       '</div>';
   } else if(state.person.role!=='assessor' && (d.status==='draft'||d.status==='changes_requested')){
@@ -1368,6 +1392,142 @@ function commentsSection(d){
   }
   html += '</div>';
   return html;
+}
+/* ---------- NSARDA assessment form (matches the official 2025 v1.0 sheet) ---------- */
+var NS_DISCIPLINE = [{v:'scent_specific',l:'Scent-Specific'},{v:'non_scent_specific',l:'Non Scent-Specific'}];
+var NS_GRADE_TERRAIN = [{v:'lowland',l:'Lowland'},{v:'mountain',l:'Mountain'}];
+var NS_GRADE_LEVEL = [{v:'initial',l:'Initial'},{v:'senior',l:'Senior'},{v:'regrade',l:'Regrade'}];
+var NS_READ_YN = [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'UN',l:'UN \u2013 Dog unsighted to handler'}];
+var NS_AIR_SCENT_STRIKE = [
+  {v:'A',l:'A \u2013 Straight to Body Site'},{v:'B',l:'B \u2013 To Body Site, had to work hard to find'},
+  {v:'C',l:'C \u2013 To Body Site, did not find body location'},{v:'D',l:'D \u2013 Strike / bumped into Body Site'},
+  {v:'E',l:'E \u2013 Ground scented to Body Location'},{v:'F',l:'F \u2013 Aware of Body Site & no interest'},
+  {v:'G',l:'G \u2013 To Body Site & no interest'},{v:'H',l:'H \u2013 To Body Site, interest but no return'}];
+var NS_RETURN_TO_HANDLER = [
+  {v:'I',l:'I \u2013 Too close to return'},{v:'J',l:'J \u2013 All the way'},{v:'K',l:'K \u2013 Well short of handler'},
+  {v:'L',l:'L \u2013 Only till handler in sight'},{v:'M',l:'M \u2013 Came out from body but no return'},
+  {v:'N',l:'N \u2013 No / did not attempt to return'}];
+var NS_INDICATION = [
+  {v:'O',l:'O \u2013 Full indication to handler'},{v:'P',l:'P \u2013 Handler read attempt to indicate'},
+  {v:'Q',l:'Q \u2013 Handler did not read dog\u2019s actions'},{v:'R',l:'R \u2013 No indication'},
+  {v:'S',l:'S \u2013 Suspected / actual induced indication'}];
+var NS_RETURN_TO_BODY = [
+  {v:'T',l:'T \u2013 All the way back to the body'},{v:'U',l:'U \u2013 All the way close to the body site'},
+  {v:'V',l:'V \u2013 Well short of body site'},{v:'W',l:'W \u2013 Too close to return'},
+  {v:'X',l:'X \u2013 No attempt or return to the body'}];
+var NS_FOLLOW_UP = [
+  {v:'Y',l:'Y \u2013 Consistent handler / body returns'},{v:'Z',l:'Z \u2013 No attempt to follow up'},
+  {v:'Z1',l:'Z1 \u2013 Carried out satisfactory returns'},{v:'Z2',l:'Z2 \u2013 Carried out weak returns'},
+  {v:'Z3',l:'Z3 \u2013 Too close for follow up returns'}];
+var NS_WIND_OPTS = ['Light','Moderate','Strong','Steady','Variable','Gusting'];
+var NS_WEATHER_OPTS = ['Wet','Good Vis','Poor Vis','Snowing','Stormy'];
+var NS_TEMP_OPTS = ['Cold','Average','Freezing','Warm','Hot','Humid'];
+var NS_TERRAIN_OPTS = ['Marsh/Wet','Gorse','Deep Bracken','Ice','Forest/Woodland','Crags','Tarmac/Concrete','Grassland','Deep Heather','Snow','Boulder Field','Moorland'];
+var NS_SCORE_LABELS = {10:'Perfect',9:'Excellent',8:'Extremely Good',7:'Very Good',6:'Good',5:'Weak',4:'Acceptable',3:'Poor',2:'Very Poor',1:'Extremely Poor',0:'Total Failure'};
+var NS_SCORE_FIELDS = [['dogRanging',"Dog's Ranging Ability"],['dogHunting',"Dog's Natural Hunting Ability"],
+  ['handlerDirection',"Handler's Direction Control of Dog"],['handlerCoverage','Handler Overall Coverage of Area'],
+  ['handlerReading',"Handler General Reading of Dog's Actions"]];
+function codeLabel(options, v){ var m=options.filter(function(o){return o.v===v;})[0]; return m?m.l:(v||'\u2014'); }
+function codeSelect(path, value, options){
+  return '<select onchange="App.setField(\''+path+'\',this.value)" style="width:100%;margin-bottom:10px;">'+
+    '<option value="">\u2014</option>'+
+    options.map(function(o){return '<option value="'+o.v+'" '+(value===o.v?'selected':'')+'>'+esc(o.l)+'</option>';}).join('')+
+    '</select>';
+}
+function scoreSelect(path, value, aiDraft){
+  var html = '<select onchange="App.setField(\''+path+'\',this.value)" style="width:100%;">'+
+    '<option value="">\u2014 not scored \u2014</option>'+
+    [10,9,8,7,6,5,4,3,2,1,0].map(function(n){return '<option value="'+n+'" '+(String(value)===String(n)?'selected':'')+'>'+n+' \u2013 '+NS_SCORE_LABELS[n]+'</option>';}).join('')+
+    '</select>';
+  if(aiDraft && aiDraft.score!=null) html += '<div style="font-size:11px;color:var(--neutral-dim);margin-top:4px;">AI suggested '+aiDraft.score+' \u2013 '+esc(aiDraft.note||'')+' (unconfirmed, watch the footage before accepting)</div>';
+  return html;
+}
+function chipGroup(field, arr, options){
+  arr = arr||[];
+  return '<div class="chips">'+options.map(function(o){
+    return '<button type="button" class="'+(arr.indexOf(o)!==-1?'active':'')+'" onclick="App.toggleNsardaTag(\''+field+'\',\''+o+'\')">'+o+'</button>';
+  }).join('')+'</div>';
+}
+function nsardaFormHTML(d, editable){
+  var n = d.nsarda || {};
+  n.scores=n.scores||{}; n.bodies=n.bodies||[]; n.windCond=n.windCond||[]; n.weather=n.weather||[];
+  n.temperature=n.temperature||[]; n.terrain=n.terrain||[]; n.timings=n.timings||{};
+  var ai = n.aiDraft||{};
+  var html = '<div class="card"><div class="readonly-label" style="margin-bottom:12px;">NSARDA assessment</div>';
+
+  html += editable ?
+    ('<label>Discipline</label>'+seg('nsarda.discipline', n.discipline, NS_DISCIPLINE)+
+     '<div class="row2"><div><label>Grading \u2014 terrain</label>'+seg('nsarda.gradingTerrain', n.gradingTerrain, NS_GRADE_TERRAIN)+'</div>'+
+     '<div><label>Grading \u2014 level</label>'+seg('nsarda.gradingLevel', n.gradingLevel, NS_GRADE_LEVEL)+'</div></div>') :
+    (roField('Discipline', n.discipline==='scent_specific'?'Scent-Specific':n.discipline==='non_scent_specific'?'Non Scent-Specific':'')+
+     roField('Grading', [n.gradingTerrain,n.gradingLevel].filter(Boolean).join(' / ')));
+
+  html += '<div class="readonly-label" style="margin-top:16px;margin-bottom:8px;">Performance scores (0\u201310)</div>';
+  NS_SCORE_FIELDS.forEach(function(f){
+    var key=f[0], label=f[1];
+    html += '<label style="margin-top:8px;">'+label+'</label>'+(editable ?
+      scoreSelect('nsarda.scores.'+key, n.scores[key], ai[key]) :
+      '<div class="readonly-field">'+(n.scores[key]!=null&&n.scores[key]!==''?n.scores[key]+' \u2013 '+NS_SCORE_LABELS[n.scores[key]]:'\u2014')+'</div>');
+  });
+
+  html += '<div class="readonly-label" style="margin-top:16px;margin-bottom:8px;">Finds / bodies</div>';
+  html += n.bodies.map(function(b, idx){
+    var inner = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong style="font-size:13px;">Body '+(idx+1)+'</strong>'+
+      (editable ? '<button type="button" class="btn btn-secondary" style="width:auto;padding:3px 10px;font-size:12px;margin:0;" onclick="App.removeNsardaBody('+idx+')">Remove</button>' : '')+'</div>';
+    if(editable){
+      inner += '<div class="row2" style="margin-top:8px;"><div><label>Handler read strike?</label>'+codeSelect('nsarda.bodies.'+idx+'.readStrike', b.readStrike, NS_READ_YN)+'</div>'+
+        '<div><label>Handler read find?</label>'+codeSelect('nsarda.bodies.'+idx+'.readFind', b.readFind, NS_READ_YN)+'</div></div>'+
+        '<label>Air scent strike</label>'+codeSelect('nsarda.bodies.'+idx+'.airScentStrike', b.airScentStrike, NS_AIR_SCENT_STRIKE)+
+        '<label>Return to handler</label>'+codeSelect('nsarda.bodies.'+idx+'.returnToHandler', b.returnToHandler, NS_RETURN_TO_HANDLER)+
+        '<label>Indication</label>'+codeSelect('nsarda.bodies.'+idx+'.indication', b.indication, NS_INDICATION)+
+        '<label>Return to body</label>'+codeSelect('nsarda.bodies.'+idx+'.returnToBody', b.returnToBody, NS_RETURN_TO_BODY)+
+        '<label>Follow up sequence</label>'+codeSelect('nsarda.bodies.'+idx+'.followUp', b.followUp, NS_FOLLOW_UP)+
+        '<label>Name / article</label><input type="text" value="'+esc(b.nameArticle)+'" oninput="onDraftInput(\'nsarda.bodies.'+idx+'.nameArticle\',this.value)">'+
+        '<div class="row2"><div><label>Found \u2014 hr(s)</label><input type="text" value="'+esc(b.foundHr)+'" oninput="onDraftInput(\'nsarda.bodies.'+idx+'.foundHr\',this.value)"></div>'+
+        '<div><label>Mins after start</label><input type="text" value="'+esc(b.foundMin)+'" oninput="onDraftInput(\'nsarda.bodies.'+idx+'.foundMin\',this.value)"></div></div>'+
+        '<label>Description of hide</label><input type="text" value="'+esc(b.hideDescription)+'" oninput="onDraftInput(\'nsarda.bodies.'+idx+'.hideDescription\',this.value)">';
+    } else {
+      inner += roField('Handler read strike', b.readStrike) + roField('Handler read find', b.readFind) +
+        roField('Air scent strike', codeLabel(NS_AIR_SCENT_STRIKE,b.airScentStrike)) +
+        roField('Return to handler', codeLabel(NS_RETURN_TO_HANDLER,b.returnToHandler)) +
+        roField('Indication', codeLabel(NS_INDICATION,b.indication)) +
+        roField('Return to body', codeLabel(NS_RETURN_TO_BODY,b.returnToBody)) +
+        roField('Follow up', codeLabel(NS_FOLLOW_UP,b.followUp)) +
+        roField('Name / article', b.nameArticle) +
+        roField('Found', (b.foundHr?b.foundHr+'h ':'')+(b.foundMin?b.foundMin+'m after start':'')) +
+        roField('Hide description', b.hideDescription);
+    }
+    return '<div class="card" style="background:var(--secondary-lighter);margin-top:10px;">'+inner+'</div>';
+  }).join('');
+  if(editable && n.bodies.length<4){ html += '<button type="button" class="btn btn-secondary" onclick="App.addNsardaBody()">+ Add a find</button>'; }
+
+  html += '<div class="readonly-label" style="margin-top:16px;margin-bottom:8px;">Area details</div>';
+  if(editable){
+    html += '<label>Area type</label>'+seg('nsarda.areaType', n.areaType, [{v:'mountainside',l:'Mountainside'},{v:'lowland',l:'Lowland'},{v:'urban',l:'Urban'}])+
+      '<label>Wind</label>'+chipGroup('windCond', n.windCond, NS_WIND_OPTS)+
+      '<label>Weather</label>'+chipGroup('weather', n.weather, NS_WEATHER_OPTS)+
+      '<label>Temperature</label>'+chipGroup('temperature', n.temperature, NS_TEMP_OPTS)+
+      '<label>Terrain</label>'+chipGroup('terrain', n.terrain, NS_TERRAIN_OPTS)+
+      '<div class="row2"><div><label>Start</label><input type="text" value="'+esc(n.timings.start)+'" oninput="onDraftInput(\'nsarda.timings.start\',this.value)"></div>'+
+      '<div><label>Finish</label><input type="text" value="'+esc(n.timings.finish)+'" oninput="onDraftInput(\'nsarda.timings.finish\',this.value)"></div></div>'+
+      '<div class="row2"><div><label>Total \u2014 hr(s)</label><input type="text" value="'+esc(n.timings.totalHr)+'" oninput="onDraftInput(\'nsarda.timings.totalHr\',this.value)"></div>'+
+      '<div><label>Total \u2014 mins</label><input type="text" value="'+esc(n.timings.totalMin)+'" oninput="onDraftInput(\'nsarda.timings.totalMin\',this.value)"></div></div>'+
+      '<label>Additional information</label><textarea rows="3" oninput="onDraftInput(\'nsarda.additionalInfo\',this.value)">'+esc(n.additionalInfo)+'</textarea>'+
+      '<label style="margin-top:10px;">Outcome</label>'+seg('nsarda.outcome', n.outcome, [{v:'pass',l:'Pass'},{v:'ref',l:'Ref'},{v:'fail',l:'Fail'}]);
+  } else {
+    html += roField('Area type', n.areaType) + roField('Wind', n.windCond.join(', ')) + roField('Weather', n.weather.join(', ')) +
+      roField('Temperature', n.temperature.join(', ')) + roField('Terrain', n.terrain.join(', ')) +
+      roField('Timings', (n.timings.start||'\u2014')+' \u2013 '+(n.timings.finish||'\u2014')+' ('+(n.timings.totalHr||'0')+'h '+(n.timings.totalMin||'0')+'m)') +
+      roField('Additional information', n.additionalInfo) +
+      roField('Outcome', (n.outcome||'').toUpperCase());
+  }
+  html += '</div>';
+  return html;
+}
+function hasNsardaData(n){
+  if(!n) return false;
+  return !!(n.discipline || n.outcome || (n.bodies&&n.bodies.length) ||
+    Object.keys(n.scores||{}).some(function(k){return n.scores[k];}));
 }
 function roField(label,val){
   if(val===undefined||val===null||val==='') return '';
@@ -1501,20 +1661,32 @@ window.App = {
     await dbPut(STORE, state.draft);
   },
   removePhoto: function(id){ state.draft.photos = state.draft.photos.filter(function(p){return p.id!==id;}); render(); },
-  onVideo: async function(e){
-    var file = e.target.files[0];
-    if(!file) return;
-    if(file.size > 200*1024*1024){ alert('That video is over 200MB \u2014 trim it first or lower the recording quality (720p is plenty for review).'); return; }
-    var id = uid('v');
-    state.draft.videos = state.draft.videos||[];
-    state.draft.videos.push({id:id, name:file.name, uploadStatus:'queued', durationSeconds:null});
-    render();
-    await dbPut(STORE, state.draft);
-    var path = state.person.id+'/'+state.draft.id+'/'+id+'-'+file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
-    await enqueueMedia(state.draft.id, 'video', id, file, path);
-    syncQueue();
+  openVideoPage: async function(){
+    try{ await saveLog(state.draft); }catch(e){}
+    var url = 'video-review.html?report='+encodeURIComponent(state.draft.id)+
+      '&person='+encodeURIComponent(state.person.id)+'&name='+encodeURIComponent(state.person.name||'');
+    window.open(url, '_blank');
   },
-  removeVideo: function(id){ state.draft.videos = (state.draft.videos||[]).filter(function(v){return v.id!==id;}); render(); },
+  removeVideoRef: async function(id){
+    if(!confirm('Remove this video from the report? (The file itself stays in storage.)')) return;
+    state.draft.videos = (state.draft.videos||[]).filter(function(v){return v.id!==id;});
+    render();
+    try{ await saveLog(state.draft); }catch(e){}
+  },
+  toggleNsardaTag: function(field, value){
+    var arr = state.draft.nsarda[field] = state.draft.nsarda[field]||[];
+    var idx = arr.indexOf(value);
+    if(idx===-1) arr.push(value); else arr.splice(idx,1);
+    render();
+  },
+  addNsardaBody: function(){
+    state.draft.nsarda.bodies = state.draft.nsarda.bodies||[];
+    if(state.draft.nsarda.bodies.length>=4) return;
+    state.draft.nsarda.bodies.push({readStrike:'',readFind:'',airScentStrike:'',returnToHandler:'',indication:'',returnToBody:'',followUp:'',nameArticle:'',foundHr:'',foundMin:'',hideDescription:''});
+    render();
+  },
+  removeNsardaBody: function(idx){ state.draft.nsarda.bodies.splice(idx,1); render(); },
+  saveAssessorProgress: async function(){ try{ await saveLog(state.draft); }catch(e){} },
   setCommentBody: function(v){ state._commentBody = v; },
   noteAtCurrentTime: function(videoId){
     var el = document.getElementById('vid_'+videoId);

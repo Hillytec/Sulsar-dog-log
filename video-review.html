@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Review — Search Dog Log</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tus-js-client@4.1.0/dist/tus.min.js"></script>
+<style>
+:root{
+  --primary:#FF6B00; --primary-dim:#7A3A12; --secondary:#1B263B; --secondary-light:#25334C;
+  --secondary-lighter:#324562; --tertiary:#FFD60A; --neutral:#E0E1DD; --neutral-dim:#8D93A6;
+  --line: rgba(224,225,221,0.12); --danger:#E5484D; --success:#3FBF7F;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:#10182A;}
+body{font-family:'Inter',-apple-system,sans-serif;color:var(--neutral);}
+#app{max-width:560px;margin:0 auto;min-height:100vh;background:var(--secondary);padding:20px 18px 60px;}
+h1{font-size:19px;margin:0 0 2px;}
+.sub{color:var(--neutral-dim);font-size:13px;margin:0 0 20px;}
+.card{background:var(--secondary-light);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px;}
+.label{font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:var(--neutral-dim);margin-bottom:8px;font-weight:700;}
+.row{display:flex;justify-content:space-between;font-size:14px;padding:5px 0;border-bottom:1px solid var(--line);}
+.row:last-child{border-bottom:none;}
+.row .k{color:var(--neutral-dim);}
+.upload-btn{display:block;text-align:center;border:1.5px dashed var(--secondary-lighter);border-radius:10px;padding:22px;font-size:14px;font-weight:600;color:var(--neutral);cursor:pointer;}
+.upload-btn input{display:none;}
+.btn{border:none;border-radius:10px;padding:12px 16px;font-size:14px;font-weight:700;cursor:pointer;width:100%;margin-top:10px;}
+.btn-primary{background:var(--primary);color:#fff;}
+.btn-secondary{background:var(--secondary-lighter);color:var(--neutral);}
+.btn:disabled{opacity:0.5;cursor:default;}
+.notice{font-size:13px;color:var(--neutral-dim);background:var(--secondary-lighter);border-radius:8px;padding:10px 12px;margin-top:10px;}
+.upload-track{background:var(--secondary-lighter);border-radius:6px;overflow:hidden;height:8px;margin-top:10px;}
+.upload-fill{height:100%;background:var(--primary);transition:width .2s ease;}
+.pct{font-size:13px;font-weight:700;margin-top:8px;color:var(--primary);}
+video{width:100%;border-radius:8px;margin-top:10px;display:block;}
+.vid-row{margin-bottom:14px;}
+.vid-name{font-size:12px;color:var(--neutral-dim);margin-top:4px;}
+select{background:var(--secondary-lighter);color:var(--neutral);border:1px solid var(--line);border-radius:6px;padding:5px 6px;font-size:12px;}
+.crit-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px;}
+.crit-row:last-child{border-bottom:none;}
+.badge{font-size:10px;font-weight:700;text-transform:uppercase;padding:3px 8px;border-radius:999px;}
+.err{color:var(--danger);font-size:13px;margin-top:8px;}
+a{color:var(--primary);}
+</style>
+</head>
+<body>
+<div id="app">Loading&hellip;</div>
+<script>
+/* ---------- config ---------- */
+var SUPABASE_URL = 'https://rxjylnyeokgcgyulcery.supabase.co';
+var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4anlsbnllb2tnY2d5dWxjZXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDkwNjcsImV4cCI6MjEwNDEyNTA2N30.rJXecBwmVYu9PcSQs1SaYt9Ik4x57KF7tA-IwKgMaZo';
+var MEDIA_BUCKET = 'report-media';
+/* the five official NSARDA performance-score categories (2025 v1.0 sheet) */
+var NS_SCORE_FIELDS = [['dogRanging',"Dog's Ranging Ability"],['dogHunting',"Dog's Natural Hunting Ability"],
+  ['handlerDirection',"Handler's Direction Control of Dog"],['handlerCoverage','Handler Overall Coverage of Area'],
+  ['handlerReading',"Handler General Reading of Dog's Actions"]];
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ---------- state ---------- */
+function qp(name){ return new URLSearchParams(location.search).get(name); }
+var REPORT_ID = qp('report');
+var PERSON_ID = qp('person');
+var PERSON_NAME = qp('name') || '';
+var report = null;
+var uploadState = null; /* {pct, status:'uploading'|'error', error} */
+
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+async function loadReport(){
+  var res = await sb.from('reports').select('*').eq('id', REPORT_ID).single();
+  if(res.error){ report = null; return false; }
+  var d = res.data.data || {};
+  d.id = res.data.id; d.status = res.data.status;
+  d.dog = res.data.dog_name; d.handler = res.data.handler_name; d.location = res.data.location; d.date = res.data.report_date;
+  d.videos = d.videos || [];
+  d.nsarda = d.nsarda || {}; d.nsarda.scores = d.nsarda.scores || {}; d.nsarda.aiDraft = d.nsarda.aiDraft || {};
+  report = d;
+  return true;
+}
+async function saveReportField(patch){
+  /* read-modify-write against the latest row so we don't clobber other concurrent edits */
+  var res = await sb.from('reports').select('data').eq('id', REPORT_ID).single();
+  if(res.error) throw res.error;
+  var data = res.data.data || {};
+  Object.keys(patch).forEach(function(k){ data[k] = patch[k]; });
+  var upd = await sb.from('reports').update({data: data, updated_at: new Date().toISOString()}).eq('id', REPORT_ID);
+  if(upd.error) throw upd.error;
+  Object.keys(patch).forEach(function(k){ report[k] = patch[k]; });
+}
+
+function render(){
+  if(!REPORT_ID){
+    document.getElementById('app').innerHTML = '<h1>Video review</h1><div class="err">No report specified &mdash; open this page from a link inside the Search Dog Log app.</div>';
+    return;
+  }
+  if(!report){
+    document.getElementById('app').innerHTML = '<h1>Video review</h1><div class="err">Could not load that report. Check the link and your connection, then reload.</div>';
+    return;
+  }
+  var d = report;
+  var html = '<h1>Video review</h1><div class="sub">'+esc(PERSON_NAME?('Signed in as '+PERSON_NAME+' \u2014 '):'')+'attach video evidence to this training log</div>';
+
+  html += '<div class="card"><div class="label">Report</div>'+
+    '<div class="row"><span class="k">Date</span><span>'+esc(d.date||'\u2014')+'</span></div>'+
+    '<div class="row"><span class="k">Handler</span><span>'+esc(d.handler||'\u2014')+'</span></div>'+
+    '<div class="row"><span class="k">Dog</span><span>'+esc(d.dog||'\u2014')+'</span></div>'+
+    '<div class="row"><span class="k">Location</span><span>'+esc(d.location||'\u2014')+'</span></div>'+
+    '<div class="row"><span class="k">Status</span><span>'+esc(d.status||'\u2014')+'</span></div>'+
+    '</div>';
+
+  html += '<div class="card"><div class="label">Upload video</div>';
+  if(uploadState && uploadState.status==='uploading'){
+    html += '<div class="notice">Uploading&hellip; you can leave this tab open in the background; if the connection drops it will resume from where it left off.</div>'+
+      '<div class="upload-track"><div class="upload-fill" style="width:'+(uploadState.pct||0)+'%;"></div></div>'+
+      '<div class="pct">'+(uploadState.pct||0)+'%</div>';
+  } else {
+    html += (d.videos.length<3 ?
+      '<label class="upload-btn">Tap to choose a video (up to 3 for this report)<input id="fileInput" type="file" accept="video/*" onchange="onFileChosen(event)"></label>' :
+      '<div class="notice">Maximum of 3 videos reached for this report.</div>');
+    if(uploadState && uploadState.status==='error'){
+      html += '<div class="err">'+esc(uploadState.error)+'</div><button class="btn btn-secondary" onclick="retryUpload()">Retry</button>';
+    }
+  }
+  html += '</div>';
+
+  if(d.videos.length){
+    html += '<div class="card"><div class="label">Attached to this report</div>';
+    html += d.videos.map(function(v){
+      return '<div class="vid-row">'+(v.url ? '<video controls preload="metadata" src="'+v.url+'"></video>' : '<div class="notice">'+esc(v.name)+' \u2014 pending</div>')+
+        '<div class="vid-name">'+esc(v.name||'Video')+'</div></div>';
+    }).join('');
+    html += '</div>';
+  }
+
+  html += '<div class="card"><div class="label">First-pass NSARDA notes</div>';
+  if(!d.videos.length){
+    html += '<div class="notice">Upload a video first, then generate a provisional first-pass score for the assessor to confirm while watching.</div>';
+  } else {
+    var hasDraft = Object.keys(d.nsarda.aiDraft).length>0;
+    html += '<button class="btn btn-primary" '+(genBusy?'disabled':'')+' onclick="generateFirstPass()">'+
+      (genBusy ? 'Generating\u2026' : (hasDraft ? 'Regenerate first-pass scores' : 'Generate first-pass scores')) + '</button>';
+    if(genError) html += '<div class="err">'+esc(genError)+'</div>';
+    if(hasDraft){
+      html += NS_SCORE_FIELDS.map(function(f){
+        var a = d.nsarda.aiDraft[f[0]];
+        if(!a) return '';
+        return '<div class="crit-row" style="align-items:flex-start;"><span>'+esc(f[1])+'</span>'+
+          '<span class="badge" style="background:var(--tertiary);color:#08301c;flex:none;">'+esc(a.score)+'</span></div>'+
+          '<div class="vid-name" style="margin-top:-4px;margin-bottom:6px;">'+esc(a.note||'')+'</div>';
+      }).join('');
+      html += '<div class="notice" style="margin-top:10px;">Provisional only \u2014 the assessor confirms each score in the main app while reviewing the footage. The coded find-sequence fields (air scent strike, indication, etc.) always need a human watching \u2014 this only drafts the five overall performance scores.</div>';
+    }
+  }
+  html += '</div>';
+
+  html += '<div class="notice">Done here? Close this tab and go back to the Search Dog Log app &mdash; it picks this up automatically.</div>';
+  document.getElementById('app').innerHTML = html;
+}
+
+/* ---------- upload ---------- */
+var currentUpload = null, currentFile = null;
+function onFileChosen(e){
+  var file = e.target.files[0];
+  if(!file) return;
+  currentFile = file;
+  startUpload(file);
+}
+function retryUpload(){ if(currentFile) startUpload(currentFile); }
+function startUpload(file){
+  var id = 'v'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+  var safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  var path = PERSON_ID+'/'+REPORT_ID+'/'+id+'-'+safeName;
+  uploadState = {pct:0, status:'uploading'};
+  render();
+  var upload = new tus.Upload(file, {
+    endpoint: SUPABASE_URL+'/storage/v1/upload/resumable',
+    retryDelays: [0, 3000, 5000, 10000, 20000],
+    chunkSize: 6*1024*1024, /* required by Supabase's resumable upload implementation */
+    removeFingerprintOnSuccess: true,
+    headers: { authorization: 'Bearer '+SUPABASE_ANON_KEY, apikey: SUPABASE_ANON_KEY, 'x-upsert': 'true' },
+    uploadDataDuringCreation: true,
+    metadata: { bucketName: MEDIA_BUCKET, objectName: path, contentType: file.type||'video/mp4', cacheControl: '3600' },
+    onError: function(error){
+      uploadState = {status:'error', error: (error && error.message) || 'Upload failed'};
+      render();
+    },
+    onProgress: function(bytesUploaded, bytesTotal){
+      uploadState = {pct: Math.round(bytesUploaded/bytesTotal*100), status:'uploading'};
+      render();
+    },
+    onSuccess: async function(){
+      var publicUrl = SUPABASE_URL+'/storage/v1/object/public/'+MEDIA_BUCKET+'/'+path;
+      try{
+        var videos = (report.videos||[]).concat([{id:id, name:safeName, url:publicUrl, uploadStatus:'done'}]);
+        await saveReportField({videos: videos});
+        uploadState = null;
+      }catch(e){
+        uploadState = {status:'error', error:'Uploaded, but could not save it to the report: '+(e.message||e)};
+      }
+      render();
+    }
+  });
+  currentUpload = upload;
+  upload.findPreviousUploads().then(function(prev){
+    if(prev.length) upload.resumeFromPreviousUpload(prev[0]);
+    upload.start();
+  });
+}
+
+/* ---------- AI first-pass ---------- */
+var genBusy = false, genError = null;
+async function generateFirstPass(){
+  genBusy = true; genError = null; render();
+  try{
+    var res = await fetch(SUPABASE_URL+'/functions/v1/nsarda-first-pass', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+SUPABASE_ANON_KEY, 'apikey':SUPABASE_ANON_KEY},
+      body: JSON.stringify({
+        scoreFields: NS_SCORE_FIELDS.map(function(f){return {key:f[0], label:f[1]};}),
+        session: {
+          trainingObjective: report.trainingObjective, numSubjects: report.numSubjects, trailSize: report.trailSize,
+          trailAge: report.trailAge, numTurns: report.numTurns, scentArticle: report.scentArticle,
+          scentArticleType: report.scentArticleType, timeOnTrail: report.timeOnTrail, fieldTech: report.fieldTech,
+          environmentConditions: report.environmentConditions, trainerComments: report.trainerComments,
+          handlerComments: report.handlerComments
+        }
+      })
+    });
+    if(!res.ok) throw new Error('Server returned '+res.status);
+    var body = await res.json();
+    /* AI only ever drafts the five overall scores \u2014 never the coded find-sequence fields,
+       which need someone actually watching the footage */
+    await saveReportField({ nsarda: Object.assign({}, report.nsarda, { aiDraft: body.scores||{} }) });
+  }catch(e){
+    genError = 'Could not generate scores: '+(e.message||e);
+  }
+  genBusy = false; render();
+}
+
+(async function boot(){
+  await loadReport();
+  render();
+})();
+</script>
+</body>
+</html>
