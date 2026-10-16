@@ -606,19 +606,24 @@ async function downloadLogPDF(log){
   var margin = 42, y = margin, lineH = 14;
 
   function ensureSpace(h){ if(y+h > pageH-margin){ doc.addPage(); y = margin; } }
-  function sectionTitle(text){
-    ensureSpace(20);
+  var pendingTitle = null;
+  function sectionTitle(text){ pendingTitle = text; } /* drawn together with the first content under it, so a heading is never left alone at the foot of a page */
+  function flushTitle(h){
+    h = Math.min(h, pageH-margin*2-16);
+    if(pendingTitle===null){ ensureSpace(h); return; }
+    ensureSpace(16+h);
     doc.setFont('helvetica','bold'); doc.setFontSize(11); doc.setTextColor(230,110,20);
-    doc.text(String(text).toUpperCase(), margin, y); y+=14;
+    doc.text(String(pendingTitle).toUpperCase(), margin, y); y+=14;
+    pendingTitle = null;
   }
   function field(label, value){
     if(value===undefined||value===null||value==='') return;
-    ensureSpace(12);
+    doc.setFont('helvetica','normal'); doc.setFontSize(10.5);
+    var lines = doc.splitTextToSize(String(value), pageW-margin*2);
+    flushTitle(11+lines.length*lineH+6); /* label and its text always stay together */
     doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(120,120,120);
     doc.text(String(label).toUpperCase(), margin, y); y+=11;
     doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
-    var lines = doc.splitTextToSize(String(value), pageW-margin*2);
-    ensureSpace(lines.length*lineH+6);
     doc.text(lines, margin, y); y += lines.length*lineH+8;
   }
   function fieldRow(pairs){
@@ -628,7 +633,7 @@ async function downloadLogPDF(log){
       return doc.splitTextToSize(v, colW);
     });
     var maxLines = Math.max(linesArr[0].length, linesArr[1].length);
-    ensureSpace(maxLines*lineH+18);
+    flushTitle(maxLines*lineH+18);
     pairs.forEach(function(p,i){
       var x = margin + i*(colW+20);
       doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(120,120,120);
@@ -657,16 +662,6 @@ async function downloadLogPDF(log){
   fieldRow([['Session type', log.type],['Location', log.location]]);
   field('Training objective', log.trainingObjective);
 
-  sectionTitle('Trail & hides');
-  fieldRow([['Subjects / hides', log.numSubjects],['Trail size', log.trailSize]]);
-  fieldRow([['Trail age', log.trailAge],['Turns / transitions', log.numTurns]]);
-
-  sectionTitle('Scent article');
-  fieldRow([['Scent article', log.scentArticle],['Article type', log.scentArticleType]]);
-  fieldRow([['Scent specific', log.scentSpecific],['Trail', log.trailYes]]);
-  fieldRow([['Direction confirmed', log.directionConfirmed],['Field tech', log.fieldTech]]);
-  field('Time on trail / in area', log.timeOnTrail);
-
   sectionTitle('Weather');
   if(log.weather.indoors){
     field('Conditions', 'Indoors');
@@ -677,42 +672,20 @@ async function downloadLogPDF(log){
   }
   field('Environment / conditions notes', log.environmentConditions);
 
-  sectionTitle('Notes & summary');
-  field('Trainer comments', log.trainerComments);
-  field('Handler comments', log.handlerComments);
-  field('Going forward', log.goingForward);
-  fieldRow([['Reward', log.reward],['Final trained response', log.ftr]]);
-  field('Objectives met', log.objectivesMet);
-  field('Any other comments', log.anyOtherComments);
-
-  if(log.gpx && log.gpx.points && log.gpx.points.length){
-    var mapEl = document.getElementById('gpxMapView');
-    if(mapEl){
-      try{
-        var canvas = await html2canvas(mapEl, {useCORS:true, backgroundColor:'#1B263B'});
-        var imgData = canvas.toDataURL('image/jpeg',0.7);
-        sectionTitle('GPX track \u2014 '+(log.gpx.name||''));
-        var imgW = pageW-margin*2, imgH = imgW*(canvas.height/canvas.width);
-        ensureSpace(imgH+10);
-        doc.addImage(imgData,'JPEG',margin,y,imgW,imgH);
-        y += imgH+16;
-      }catch(e){}
-    }
-  }
-
-  if(log.photos && log.photos.length){
-    sectionTitle('Photos');
-    var perRow=3, gap=10;
-    var cellW = (pageW-margin*2-gap*(perRow-1))/perRow, cellH=cellW, col=0;
-    log.photos.forEach(function(p){
-      if(col===0) ensureSpace(cellH+10);
-      var x = margin+col*(cellW+gap);
-      try{ doc.addImage(p.dataUrl,'JPEG',x,y,cellW,cellH); }catch(e){}
-      col++;
-      if(col>=perRow){ col=0; y+=cellH+gap; }
+  if(log.sketches && log.sketches.length){
+    sectionTitle('Sketch map'+(log.sketches.length>1?'s':''));
+    var skN = log.sketches.length, skGap = 12, skAvail = pageW-margin*2;
+    var skW = Math.min(170, (skAvail-skGap*(skN-1))/skN), skH = 0;
+    log.sketches.forEach(function(sk){ var ar=(sk.w&&sk.h)?sk.w/sk.h:0.56; skH = Math.max(skH, skW/ar); });
+    flushTitle(skH+30);
+    log.sketches.forEach(function(sk,i){
+      var ar=(sk.w&&sk.h)?sk.w/sk.h:0.56, hh=skW/ar, x=margin+i*(skW+skGap);
+      doc.setDrawColor(200,200,200); doc.rect(x-1, y-1, skW+2, hh+2);
+      try{ doc.addImage(sk.dataUrl,'PNG',x,y,skW,hh,undefined,'FAST'); }catch(e){}
+      doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(120,120,120);
+      doc.text('Sketch '+(i+1)+(sk.createdAt?' - '+new Date(sk.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):''), x, y+hh+12);
     });
-    if(col!==0) y += cellH+gap;
-    y += 6;
+    y += skH+24;
   }
 
   if(log.boundaryNotes || log.boundaryHazards || log.boundaryConfirmed){
@@ -721,32 +694,6 @@ async function downloadLogPDF(log){
     field('Hazards / no-go areas', log.boundaryHazards);
     field('Boundaries briefed and understood', log.boundaryConfirmed);
   }
-  if(log.timing && log.timing.start){
-    sectionTitle('Search timing');
-    fieldRow([['Started', fmtClock(log.timing.start)], ['Finished', log.timing.end ? fmtClock(log.timing.end) : 'not stopped']]);
-    field('Duration', fmtElapsed((log.timing.end||log.timing.start)-log.timing.start));
-  }
-  if(log.alerts && log.alerts.length){
-    sectionTitle('Dog alerts / finds');
-    log.alerts.forEach(function(a){
-      field(fmtClock(a.at)+((log.timing&&log.timing.start)?' (+'+fmtElapsed(a.at-log.timing.start)+')':''), a.note||'Alert');
-    });
-  }
-  if(log.sketches && log.sketches.length){
-    sectionTitle('Sketch map'+(log.sketches.length>1?'s':''));
-    log.sketches.forEach(function(sk,i){
-      var ar = (sk.w && sk.h) ? sk.w/sk.h : 0.56;
-      var hh = Math.min(380, (pageW-margin*2)/ar), ww = hh*ar;
-      ensureSpace(hh+22);
-      doc.setDrawColor(200,200,200); doc.rect(margin-1, y-1, ww+2, hh+2);
-      try{ doc.addImage(sk.dataUrl,'PNG',margin,y,ww,hh,undefined,'FAST'); }catch(e){}
-      y += hh+12;
-      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(120,120,120);
-      doc.text('Sketch '+(i+1)+(sk.createdAt?' - '+new Date(sk.createdAt).toLocaleString():''), margin, y);
-      y += 16;
-    });
-  }
-
   var rdKeys = readinessKeys();
   if(log.readiness && rdKeys.some(function(k){return log.readiness[k.key];})){
     var rdDone = rdKeys.filter(function(k){return log.readiness[k.key];});
@@ -763,6 +710,35 @@ async function downloadLogPDF(log){
     else field('Result', 'All items ticked.');
   }
 
+  if(log.timing && log.timing.start){
+    sectionTitle('Search timing');
+    fieldRow([['Started', fmtClock(log.timing.start)], ['Finished', log.timing.end ? fmtClock(log.timing.end) : 'not stopped']]);
+    field('Duration', fmtElapsed((log.timing.end||log.timing.start)-log.timing.start));
+  }
+  if(log.alerts && log.alerts.length){
+    sectionTitle('Dog alerts / finds');
+    log.alerts.forEach(function(a){
+      field(fmtClock(a.at)+((log.timing&&log.timing.start)?' (+'+fmtElapsed(a.at-log.timing.start)+')':''), a.note||'Alert');
+    });
+  }
+  sectionTitle('Trail & hides');
+  fieldRow([['Subjects / hides', log.numSubjects],['Trail size', log.trailSize]]);
+  fieldRow([['Trail age', log.trailAge],['Turns / transitions', log.numTurns]]);
+
+  sectionTitle('Scent article');
+  fieldRow([['Scent article', log.scentArticle],['Article type', log.scentArticleType]]);
+  fieldRow([['Scent specific', log.scentSpecific],['Trail', log.trailYes]]);
+  fieldRow([['Direction confirmed', log.directionConfirmed],['Field tech', log.fieldTech]]);
+  field('Time on trail / in area', log.timeOnTrail);
+
+  sectionTitle('Notes & summary');
+  field('Trainer comments', log.trainerComments);
+  field('Handler comments', log.handlerComments);
+  field('Going forward', log.goingForward);
+  fieldRow([['Reward', log.reward],['Final trained response', log.ftr]]);
+  field('Objectives met', log.objectivesMet);
+  field('Any other comments', log.anyOtherComments);
+
   var dbFive = STRATEGY_POINTS.filter(function(p,i){ return log.debriefFive && log.debriefFive[i]; }).map(function(p){return p.t;});
   if(log.debriefWell || log.debriefChange || dbFive.length){
     sectionTitle('Debrief');
@@ -771,9 +747,39 @@ async function downloadLogPDF(log){
     if(dbFive.length) field('Five things used', dbFive.join(', '));
   }
 
+  if(log.gpx && log.gpx.points && log.gpx.points.length){
+    var mapEl = document.getElementById('gpxMapView');
+    if(mapEl){
+      try{
+        var canvas = await html2canvas(mapEl, {useCORS:true, backgroundColor:'#1B263B'});
+        var imgData = canvas.toDataURL('image/jpeg',0.7);
+        sectionTitle('GPX track \u2014 '+(log.gpx.name||''));
+        var imgW = pageW-margin*2, imgH = imgW*(canvas.height/canvas.width);
+        flushTitle(imgH+10);
+        doc.addImage(imgData,'JPEG',margin,y,imgW,imgH);
+        y += imgH+16;
+      }catch(e){}
+    }
+  }
+
+  if(log.photos && log.photos.length){
+    sectionTitle('Photos');
+    var perRow=3, gap=10;
+    var cellW = (pageW-margin*2-gap*(perRow-1))/perRow, cellH=cellW, col=0;
+    log.photos.forEach(function(p){
+      if(col===0) flushTitle(cellH+10);
+      var x = margin+col*(cellW+gap);
+      try{ doc.addImage(p.dataUrl,'JPEG',x,y,cellW,cellH); }catch(e){}
+      col++;
+      if(col>=perRow){ col=0; y+=cellH+gap; }
+    });
+    if(col!==0) y += cellH+gap;
+    y += 6;
+  }
+
   if(log.trainerSignoff){
     sectionTitle('Trainer sign-off');
-    ensureSpace(80);
+    flushTitle(80);
     doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(20,20,20);
     doc.text(log.trainerSignoff.name+'   '+new Date(log.trainerSignoff.date).toLocaleString(), margin, y);
     y += 14;
@@ -1333,9 +1339,9 @@ function screenEdit(){
 
   body += readinessSection(d);
 
-  body += timerSection(d);
-
   body += groundSection(d);
+
+  body += timerSection(d);
 
   body += section('Trail &amp; hides', false, [
     '<div class="row2"><div><label>Number of subjects / hides</label><input type="text" value="'+esc(d.numSubjects)+'" oninput="onDraftInput(\'numSubjects\',this.value)"></div>'+
