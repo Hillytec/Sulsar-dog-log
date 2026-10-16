@@ -45,7 +45,10 @@
 :root[data-theme="light"] .badge.draft{background:#F2C230;}
 :root[data-theme="light"] .card,:root[data-theme="light"] details.section,:root[data-theme="light"] .log-card{box-shadow:0 1px 3px rgba(23,34,58,0.08);}
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;background:var(--page-bg);}
+html,body{margin:0;padding:0;background:var(--page-bg);overscroll-behavior-y:none;}
+button,label,summary,[onclick]{touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
+.hdr-btn{background:none;border:none;color:var(--neutral-dim);cursor:pointer;width:44px;height:44px;margin:-6px -4px;display:flex;align-items:center;justify-content:center;border-radius:12px;}
+.hdr-btn:active{background:var(--secondary-lighter);}
 body{font-family:'Inter',-apple-system,sans-serif;color:var(--neutral);}
 #app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--secondary);display:flex;flex-direction:column;position:relative;}
 .header{position:sticky;top:0;z-index:20;background:var(--secondary);padding:14px 16px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;}
@@ -181,6 +184,13 @@ details.section .section-body{padding:4px 16px 16px;}
 .al-row:last-child{border-bottom:none;}
 .al-row b{color:var(--tertiary);font-variant-numeric:tabular-nums;}
 .al-row button{flex:none;background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:2px;}
+.iv-ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:1200;background:rgba(5,8,16,.96);display:flex;flex-direction:column;font-family:'Inter',-apple-system,sans-serif;}
+.iv-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;color:#c9cfdd;font-size:12px;}
+.iv-bar button{background:var(--primary);color:#fff;border:none;border-radius:10px;font-family:inherit;font-weight:700;font-size:14px;padding:10px 18px;cursor:pointer;}
+.iv-scroll{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;display:flex;}
+.iv-scroll img{margin:auto;display:block;}
+.iv-scroll img.fit{max-width:100%;max-height:100%;object-fit:contain;}
+.iv-scroll img.big{width:250%;max-width:none;height:auto;}
 </style>
 </head>
 <body>
@@ -442,10 +452,11 @@ var _syncing=false;
 async function syncQueue(){
   if(_syncing || typeof navigator!=='undefined' && navigator.onLine===false) return;
   _syncing=true;
+  var changed=false; /* only redraw the screen if something actually changed, and never while someone is typing */
   try{
     /* retry any reports that saved locally but never reached the server */
     var pendingLogs = (await dbGetAll(STORE)).filter(function(l){ return l._syncStatus==='pending'; });
-    for(var j=0;j<pendingLogs.length;j++){ await saveLog(pendingLogs[j]); }
+    for(var j=0;j<pendingLogs.length;j++){ await saveLog(pendingLogs[j]); changed=true; }
 
     var items = await dbGetAll(QUEUE_STORE);
     var now = Date.now();
@@ -458,11 +469,15 @@ async function syncQueue(){
       try{
         var url = await uploadQueuedItem(it);
         await attachMediaUrl(it.reportId, it.kind, it.targetId, url);
+        changed=true;
       }catch(e){ /* stays queued/failed, picked up on the next pass */ }
     }
   } finally {
     _syncing=false;
-    render();
+    var a = document.activeElement;
+    var typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
+    var formScreen = state.screen==='profiles' || state.screen==='settings' || state.screen==='assessors';
+    if(changed && !typing && !formScreen) render();
   }
 }
 if(typeof window!=='undefined'){
@@ -1019,8 +1034,8 @@ function header(){
     '<div class="brand-title">Search Dog Log<span>NSARDA Suffolk</span></div></div>'+
     '<div style="display:flex;align-items:center;gap:10px;">'+
     (state.person ? '<div style="text-align:right;line-height:1.2;"><div style="font-size:13px;font-weight:700;">'+esc(state.person.name)+'</div><div style="font-size:10px;color:var(--neutral-dim);text-transform:uppercase;letter-spacing:0.05em;">'+roleLabel+'</div></div>' : '')+
-    '<button id="themeBtn" onclick="App.toggleTheme()" aria-label="Switch light or dark mode" title="Light / dark" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon(document.documentElement.getAttribute('data-theme')==='light'?'moon':'sun',20)+'</button>'+
-    '<button onclick="App.goSettings()" aria-label="Settings" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon('gear',20)+'</button>'+
+    '<button id="themeBtn" onclick="App.toggleTheme()" aria-label="Switch light or dark mode" title="Light / dark" class="hdr-btn">'+icon(document.documentElement.getAttribute('data-theme')==='light'?'moon':'sun',22)+'</button>'+
+    '<button onclick="App.goSettings()" aria-label="Settings" class="hdr-btn">'+icon('gear',22)+'</button>'+
     '</div></div>';
 }
 function bottomNav(){
@@ -1124,24 +1139,25 @@ function profileFormCard(p){
   p = p || {dogName:'', handlerName:'', photo:null, insurer:'', insuranceRenewal:'', immunisationDate:'', immunisationPhoto:null};
   return '<div class="card">'+
     '<div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">'+
-    (p.photo ? '<img src="'+p.photo+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none;">' :
+    (p.photo ? '<img data-zoom="1" src="'+p.photo+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover;flex:none;">' :
       '<div style="width:64px;height:64px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',28)+'</div>')+
     '<label class="upload-btn" style="flex:1;padding:10px;">'+icon('camera',16)+' '+(p.photo?'Change photo':'Add photo')+'<input type="file" accept="image/*" onchange="App.onProfilePhoto(event)"></label>'+
     '</div>'+
-    '<label>Dog name</label><input type="text" id="profDogName" value="'+esc(p.dogName)+'">'+
-    '<label>Handler name</label><input type="text" id="profHandlerName" value="'+esc(p.handlerName)+'">'+
+    '<label>Dog name</label><input type="text" id="profDogName" value="'+esc(p.dogName)+'" oninput="App.setProfField(\'dogName\',this.value)">'+
+    '<label>Handler name</label><input type="text" id="profHandlerName" value="'+esc(p.handlerName)+'" oninput="App.setProfField(\'handlerName\',this.value)">'+
     '<div class="eyebrow" style="margin-top:6px;">Insurance</div>'+
     '<div class="row2">'+
-    '<div><label>Insurer</label><input type="text" id="profInsurer" placeholder="e.g. Petplan" value="'+esc(p.insurer||'')+'"></div>'+
-    '<div><label>Renewal date</label><input type="date" id="profInsuranceRenewal" value="'+esc(p.insuranceRenewal||'')+'"></div>'+
+    '<div><label>Insurer</label><input type="text" id="profInsurer" placeholder="e.g. Petplan" value="'+esc(p.insurer||'')+'" oninput="App.setProfField(\'insurer\',this.value)"></div>'+
+    '<div><label>Renewal date</label><input type="date" id="profInsuranceRenewal" value="'+esc(p.insuranceRenewal||'')+'" oninput="App.setProfField(\'insuranceRenewal\',this.value)" onchange="App.setProfField(\'insuranceRenewal\',this.value)"></div>'+
     '</div>'+
     '<div class="eyebrow" style="margin-top:6px;">Immunisation</div>'+
-    '<label>Last immunisation date</label><input type="date" id="profImmsDate" value="'+esc(p.immunisationDate||'')+'">'+
+    '<label>Last immunisation date</label><input type="date" id="profImmsDate" value="'+esc(p.immunisationDate||'')+'" oninput="App.setProfField(\'immunisationDate\',this.value)" onchange="App.setProfField(\'immunisationDate\',this.value)">'+
     '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">'+
-    (p.immunisationPhoto ? '<img src="'+p.immunisationPhoto+'" style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex:none;border:1px solid var(--line);">' :
+    (p.immunisationPhoto ? '<img data-zoom="1" src="'+p.immunisationPhoto+'" title="Tap to view" style="width:56px;height:56px;border-radius:8px;object-fit:cover;flex:none;border:1px solid var(--line);cursor:zoom-in;">' :
       '<div style="width:56px;height:56px;border-radius:8px;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('camera',20)+'</div>')+
     '<label class="upload-btn" style="flex:1;padding:10px;">'+icon('camera',16)+' '+(p.immunisationPhoto?'Replace card photo':'Photo of card / evidence')+'<input type="file" accept="image/*" onchange="App.onImmunisationPhoto(event)"></label>'+
     '</div>'+
+    (p.immunisationPhoto ? '<button type="button" class="btn btn-secondary btn-slim" style="margin-bottom:12px;" onclick="App.viewProfileImms()">View card photo full size</button>' : '')+
     '<div class="btn-row" style="margin-top:6px;">'+
     '<button class="btn btn-secondary" onclick="App.cancelEditProfile()">Cancel</button>'+
     '<button class="btn btn-primary" onclick="App.saveProfileForm()">Save</button></div>'+
@@ -1152,8 +1168,7 @@ function screenProfiles(){
   var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
   body += '<h1 class="page-title">Dog profiles</h1>';
   if(state.editingProfileId!==null){
-    var editing = state.editingProfileId==='new' ? null : state.profiles.find(function(p){return p.id===state.editingProfileId;});
-    body += profileFormCard(editing || state._newProfileDraft);
+    body += profileFormCard(state._newProfileDraft);
     return body;
   }
   if(!state.profiles.length){
@@ -1162,7 +1177,7 @@ function screenProfiles(){
     state.profiles.forEach(function(p){
       var isActive = p.id===state.settings.activeProfileId;
       body += '<div class="card" style="display:flex;align-items:center;gap:12px;'+(isActive?'border-color:var(--primary);':'')+'">'+
-        (p.photo ? '<img src="'+p.photo+'" style="width:48px;height:48px;border-radius:50%;object-fit:cover;flex:none;">' :
+        (p.photo ? '<img data-zoom="1" src="'+p.photo+'" style="width:48px;height:48px;border-radius:50%;object-fit:cover;flex:none;">' :
           '<div style="width:48px;height:48px;border-radius:50%;background:var(--secondary);display:flex;align-items:center;justify-content:center;color:var(--neutral-dim);flex:none;">'+icon('dog',22)+'</div>')+
         '<div style="flex:1;min-width:0;" onclick="App.editExistingProfile(\''+p.id+'\')">'+
         '<div style="font-weight:700;">'+esc(p.dogName||'Unnamed')+(isActive?' <span style="color:var(--primary);font-size:11px;font-weight:700;">&middot; ACTIVE</span>':'')+'</div>'+
@@ -1197,6 +1212,9 @@ function screenSettings(){
       '<div><div style="font-weight:700;">My assessors</div><div style="font-size:13px;color:var(--neutral-dim);">Who can see and sign off your reports</div></div>'+icon('chev',18)+'</div></div>';
   }
 
+  var isLight = document.documentElement.getAttribute('data-theme')==='light';
+  body += '<div class="card"><div class="readonly-label" style="margin-bottom:8px;">Appearance</div>'+
+    '<div class="seg" style="margin-bottom:0;"><button type="button" class="'+(isLight?'':'active')+'" onclick="App.setTheme(\'dark\')">Dark (night)</button><button type="button" class="'+(isLight?'active':'')+'" onclick="App.setTheme(\'light\')">Light (day)</button></div></div>';
   body += '<div class="card">'+
     '<div class="readonly-label" style="margin-bottom:8px;">'+icon('lock',14)+' App lock</div>';
   if(state.settings.pin){
@@ -1345,7 +1363,7 @@ function screenEdit(){
       var pct = state._uploadProgress[p.id];
       var dot = st==='done' ? '#3B6D11' : st==='failed' ? '#993C1D' : '#854F0B';
       var label = st==='done' ? 'Synced' : st==='failed' ? 'Tap to retry' : (pct!=null ? pct+'%' : 'Uploading\u2026');
-      return '<div class="thumb"><img src="'+(p.url||p.dataUrl)+'">'+
+      return '<div class="thumb"><img data-zoom="1" src="'+(p.url||p.dataUrl)+'">'+
         '<span title="'+label+'" onclick="'+(st==='failed'?'App.retryFailedUploads()':'')+'" style="position:absolute;left:6px;bottom:6px;width:9px;height:9px;border-radius:50%;background:'+dot+';border:1.5px solid #fff;"></span>'+
         (st==='uploading'?'<span style="position:absolute;right:4px;bottom:4px;font-size:9px;background:rgba(0,0,0,.6);color:#fff;padding:1px 4px;border-radius:4px;">'+(pct!=null?pct+'%':'\u2026')+'</span>':'')+
         '<button class="rm" onclick="App.removePhoto(\''+p.id+'\')">'+icon('x',12)+'</button></div>';
@@ -1410,7 +1428,7 @@ function screenView(){
   body += roField('Environment / conditions', d.environmentConditions);
   if(d.photos && d.photos.length){
     body += '<div class="card"><div class="readonly-label">Photos</div><div class="thumbs">'+
-      d.photos.map(function(p){return '<div class="thumb"><img src="'+p.dataUrl+'"></div>';}).join('')+'</div></div>';
+      d.photos.map(function(p){return '<div class="thumb"><img data-zoom="1" data-full="'+(p.url||p.dataUrl)+'" src="'+p.dataUrl+'"></div>';}).join('')+'</div></div>';
   }
   body += roField('Search area & boundaries', d.boundaryNotes) + roField('Hazards / no-go areas', d.boundaryHazards) + roField('Boundaries briefed and understood', d.boundaryConfirmed);
   body += sketchViewCard(d) + readinessViewCard(d) + timingViewCard(d) + groundViewCard(d);
@@ -1638,7 +1656,7 @@ function sketchSection(d){
       '<button type="button" class="upload-btn" style="width:100%;background:transparent;font-family:inherit;" onclick="App.openSketch()">'+icon('pencil',18)+' Draw a sketch map ('+list.length+'/3)</button>' :
       '<div class="notice">Maximum of 3 sketches reached. Delete one to draw another.</div>',
     '<div class="thumbs">'+list.map(function(s){
-      return '<div class="thumb sk"><img src="'+s.dataUrl+'"><button class="rm" onclick="App.removeSketch(\''+s.id+'\')">'+icon('x',12)+'</button></div>';
+      return '<div class="thumb sk"><img data-zoom="1" src="'+s.dataUrl+'"><button class="rm" onclick="App.removeSketch(\''+s.id+'\')">'+icon('x',12)+'</button></div>';
     }).join('')+'</div>',
     '<button type="button" class="btn btn-secondary btn-slim" style="margin-top:12px;" onclick="App.showStrategy()">'+icon('bulb',16)+' &nbsp;My 5 things to remember</button>'
   ], 'sketch');
@@ -1646,7 +1664,7 @@ function sketchSection(d){
 function sketchViewCard(d){
   if(!d.sketches || !d.sketches.length) return '';
   return '<div class="card"><div class="readonly-label">Sketch map'+(d.sketches.length>1?'s':'')+'</div>'+
-    d.sketches.map(function(s){ return '<img src="'+s.dataUrl+'" style="width:100%;background:#fff;border-radius:10px;margin-bottom:8px;">'; }).join('')+'</div>';
+    d.sketches.map(function(s){ return '<img data-zoom="1" src="'+s.dataUrl+'" style="width:100%;background:#fff;border-radius:10px;margin-bottom:8px;">'; }).join('')+'</div>';
 }
 
 var SK_COLOURS = ['#111111','#D62828','#1E6FD9','#2E9E4F','#E8730C'];
@@ -1812,6 +1830,25 @@ async function saveSketch(){
   try{ await dbPut(STORE, d); }catch(e){}
   showStrategy(true);
 }
+
+/* ---------- tap a photo to see it full size ---------- */
+function closeImageViewer(){ var v=document.getElementById('imgViewer'); if(v) v.parentNode.removeChild(v); document.body.style.overflow=''; }
+function openImageViewer(src){
+  closeImageViewer();
+  var v = document.createElement('div'); v.id='imgViewer'; v.className='iv-ov';
+  v.innerHTML = '<div class="iv-bar"><span>Tap the picture to zoom in or out</span><button type="button" id="ivClose">Close</button></div>'+
+    '<div class="iv-scroll"><img id="ivImg" class="fit" alt=""></div>';
+  document.body.appendChild(v); document.body.style.overflow='hidden';
+  var img = document.getElementById('ivImg'); img.src = src;
+  img.addEventListener('click', function(){ img.classList.toggle('fit'); img.classList.toggle('big'); });
+  document.getElementById('ivClose').addEventListener('click', closeImageViewer);
+}
+document.addEventListener('click', function(e){
+  var t = e.target;
+  if(t && t.tagName==='IMG' && t.getAttribute('data-zoom') && !document.getElementById('imgViewer')){
+    openImageViewer(t.getAttribute('data-full') || t.src);
+  }
+});
 
 /* ---------- search area, timer, alerts, debrief ---------- */
 function fmtClock(ms){ return new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
@@ -1979,12 +2016,18 @@ window.App = {
     await dbPut(STORE, state.draft);
   },
   removePhoto: function(id){ state.draft.photos = state.draft.photos.filter(function(p){return p.id!==id;}); render(); },
+  setTheme: function(t){
+    document.documentElement.setAttribute('data-theme', t);
+    try{ localStorage.setItem('sdl_theme', t); }catch(e){}
+    var m = document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', t==='light' ? '#EEF1F6' : '#1B263B');
+    render();
+  },
   toggleTheme: function(){
     var next = document.documentElement.getAttribute('data-theme')==='light' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', next);
     try{ localStorage.setItem('sdl_theme', next); }catch(e){}
     var m = document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', next==='light' ? '#EEF1F6' : '#1B263B');
-    var b = document.getElementById('themeBtn'); if(b) b.innerHTML = icon(next==='light'?'moon':'sun', 20);
+    var b = document.getElementById('themeBtn'); if(b) b.innerHTML = icon(next==='light'?'moon':'sun', 22);
   },
   secToggle: function(key, isOpen){ state._open = state._open||{}; state._open[key] = !!isOpen; },
   toggleReady: function(key, el){
@@ -2101,44 +2144,36 @@ window.App = {
     render();
   },
   newProfile: function(){ state.editingProfileId='new'; state._newProfileDraft={dogName:'',handlerName:'',photo:null,insurer:'',insuranceRenewal:'',immunisationDate:'',immunisationPhoto:null}; render(); },
-  editExistingProfile: function(id){ state.editingProfileId=id; render(); },
+  editExistingProfile: function(id){
+    var p = state.profiles.find(function(x){return x.id===id;});
+    state._newProfileDraft = p ? JSON.parse(JSON.stringify(p)) : null; /* working copy: Cancel discards it */
+    state.editingProfileId=id; render();
+  },
+  setProfField: function(k,v){ if(state._newProfileDraft) state._newProfileDraft[k]=v; },
+  viewProfileImms: function(){ var d=state._newProfileDraft; if(d && d.immunisationPhoto) openImageViewer(d.immunisationPhoto); },
   cancelEditProfile: function(){ state.editingProfileId=null; state._newProfileDraft=null; render(); },
   onProfilePhoto: function(e){
     var file = e.target.files[0];
     if(!file) return;
     compressImage(file, 400).then(function(url){
-      if(state.editingProfileId==='new'){ state._newProfileDraft.photo = url; }
-      else {
-        var p = state.profiles.find(function(x){return x.id===state.editingProfileId;});
-        if(p) p.photo = url;
-      }
+      if(state._newProfileDraft) state._newProfileDraft.photo = url;
       render();
     });
   },
   onImmunisationPhoto: function(e){
     var file = e.target.files[0];
     if(!file) return;
-    compressImage(file, 800).then(function(url){
-      if(state.editingProfileId==='new'){ state._newProfileDraft.immunisationPhoto = url; }
-      else {
-        var p = state.profiles.find(function(x){return x.id===state.editingProfileId;});
-        if(p) p.immunisationPhoto = url;
-      }
+    loadImage(file).then(function(img){ return drawScaled(img, 1400).toDataURL('image/jpeg',0.72); }).then(function(url){
+      if(state._newProfileDraft) state._newProfileDraft.immunisationPhoto = url;
       render();
     });
   },
   saveProfileForm: async function(){
-    var dogName = document.getElementById('profDogName').value.trim();
-    var handlerName = document.getElementById('profHandlerName').value.trim();
-    var insurer = document.getElementById('profInsurer').value.trim();
-    var insuranceRenewal = document.getElementById('profInsuranceRenewal').value;
-    var immunisationDate = document.getElementById('profImmsDate').value;
-    var p;
-    if(state.editingProfileId==='new'){ p = state._newProfileDraft || {}; }
-    else { p = state.profiles.find(function(x){return x.id===state.editingProfileId;}) || {}; }
-    p.dogName = dogName; p.handlerName = handlerName;
-    p.insurer = insurer; p.insuranceRenewal = insuranceRenewal;
-    p.immunisationDate = immunisationDate;
+    var p = state._newProfileDraft || {};
+    function val(id, k){ var el=document.getElementById(id); if(el) p[k]=el.value; }
+    val('profDogName','dogName'); val('profHandlerName','handlerName'); val('profInsurer','insurer');
+    val('profInsuranceRenewal','insuranceRenewal'); val('profImmsDate','immunisationDate');
+    p.dogName = (p.dogName||'').trim(); p.handlerName = (p.handlerName||'').trim(); p.insurer = (p.insurer||'').trim();
     await saveProfile(p);
     state.editingProfileId = null; state._newProfileDraft = null;
     render();
