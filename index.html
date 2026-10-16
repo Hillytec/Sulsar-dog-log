@@ -6,6 +6,7 @@
 <title>Search Dog Log</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1B263B">
+<script>try{var __t=localStorage.getItem("sdl_theme")||"dark";document.documentElement.setAttribute("data-theme",__t);if(__t==="light")document.querySelector('meta[name="theme-color"]').setAttribute("content","#EEF1F6");}catch(e){document.documentElement.setAttribute("data-theme","dark");}</script>
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -26,9 +27,25 @@
   --line: rgba(224,225,221,0.12);
   --danger:#E5484D;
   --success:#3FBF7F;
+  --page-bg:#10182A;
+  --sun:#FFD60A;
 }
+:root[data-theme="light"]{
+  --secondary:#EEF1F6;
+  --secondary-light:#FFFFFF;
+  --secondary-lighter:#DCE2EC;
+  --neutral:#17223A;
+  --neutral-dim:#586277;
+  --tertiary:#A06C00;
+  --line:rgba(23,34,58,0.16);
+  --page-bg:#E3E8F0;
+  --sun:#D99A00;
+  --danger:#C7343A;
+}
+:root[data-theme="light"] .badge.draft{background:#F2C230;}
+:root[data-theme="light"] .card,:root[data-theme="light"] details.section,:root[data-theme="light"] .log-card{box-shadow:0 1px 3px rgba(23,34,58,0.08);}
 *{box-sizing:border-box;}
-html,body{margin:0;padding:0;background:#10182A;}
+html,body{margin:0;padding:0;background:var(--page-bg);}
 body{font-family:'Inter',-apple-system,sans-serif;color:var(--neutral);}
 #app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--secondary);display:flex;flex-direction:column;position:relative;}
 .header{position:sticky;top:0;z-index:20;background:var(--secondary);padding:14px 16px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;}
@@ -133,7 +150,7 @@ details.section .section-body{padding:4px 16px 16px;}
 .thumb.sk{width:96px;height:132px;background:#fff;}
 .thumb.sk img{object-fit:contain;}
 .btn-slim{padding:11px 14px;font-size:14px;}
-.sk-ov{position:fixed;left:0;top:0;right:0;bottom:0;height:100dvh;z-index:1000;background:#10182A;display:flex;flex-direction:column;color:var(--neutral);font-family:'Inter',-apple-system,sans-serif;}
+.sk-ov{position:fixed;left:0;top:0;right:0;bottom:0;height:100dvh;z-index:1000;background:var(--page-bg);display:flex;flex-direction:column;color:var(--neutral);font-family:'Inter',-apple-system,sans-serif;}
 .sk-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--secondary);flex:none;}
 .sk-top{padding-top:calc(8px + env(safe-area-inset-top));justify-content:space-between;}
 .sk-bot{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
@@ -158,6 +175,12 @@ details.section .section-body{padding:4px 16px 16px;}
 .st-d{font-size:14px;line-height:1.4;color:var(--neutral);}
 .st-mn{text-align:center;font-weight:800;color:var(--tertiary);font-size:15px;margin:12px 0 4px;letter-spacing:.02em;}
 .st-foot{font-size:11px;color:var(--neutral-dim);text-align:center;margin:8px 0 14px;line-height:1.4;}
+.tm-big{font-size:46px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums;color:var(--tertiary);margin:6px 0 2px;letter-spacing:.02em;}
+.tm-sub{text-align:center;font-size:12px;color:var(--neutral-dim);margin-bottom:14px;}
+.al-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.35;}
+.al-row:last-child{border-bottom:none;}
+.al-row b{color:var(--tertiary);font-variant-numeric:tabular-nums;}
+.al-row button{flex:none;background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:2px;}
 </style>
 </head>
 <body>
@@ -677,6 +700,23 @@ async function downloadLogPDF(log){
     y += 6;
   }
 
+  if(log.boundaryNotes || log.boundaryHazards || log.boundaryConfirmed){
+    sectionTitle('Search area & boundaries');
+    field('Area / boundaries', log.boundaryNotes);
+    field('Hazards / no-go areas', log.boundaryHazards);
+    field('Boundaries briefed and understood', log.boundaryConfirmed);
+  }
+  if(log.timing && log.timing.start){
+    sectionTitle('Search timing');
+    fieldRow([['Started', fmtClock(log.timing.start)], ['Finished', log.timing.end ? fmtClock(log.timing.end) : 'not stopped']]);
+    field('Duration', fmtElapsed((log.timing.end||log.timing.start)-log.timing.start));
+  }
+  if(log.alerts && log.alerts.length){
+    sectionTitle('Dog alerts / finds');
+    log.alerts.forEach(function(a){
+      field(fmtClock(a.at)+((log.timing&&log.timing.start)?' (+'+fmtElapsed(a.at-log.timing.start)+')':''), a.note||'Alert');
+    });
+  }
   if(log.sketches && log.sketches.length){
     sectionTitle('Sketch map'+(log.sketches.length>1?'s':''));
     log.sketches.forEach(function(sk,i){
@@ -696,9 +736,24 @@ async function downloadLogPDF(log){
   if(log.readiness && rdKeys.some(function(k){return log.readiness[k.key];})){
     var rdDone = rdKeys.filter(function(k){return log.readiness[k.key];});
     var rdLeft = rdKeys.filter(function(k){return !log.readiness[k.key];});
-    sectionTitle('Ready to search - '+rdDone.length+' of '+rdKeys.length+' checks ticked');
+    sectionTitle('Pre-search checklist - '+rdDone.length+' of '+rdKeys.length+' checks ticked');
     if(rdLeft.length) field('Not ticked', rdLeft.map(function(k){return k.text;}).join('; '));
     else field('Result', 'All checks ticked before the search.');
+  }
+
+  if(groundCount(log)){
+    var gLeft = GROUND_ITEMS.filter(function(i){ return !(log.onground||{})[i.key]; });
+    sectionTitle('Search checklist - '+groundCount(log)+' of '+GROUND_ITEMS.length+' ticked');
+    if(gLeft.length) field('Not ticked', gLeft.map(function(k){return k.text;}).join('; '));
+    else field('Result', 'All items ticked.');
+  }
+
+  var dbFive = STRATEGY_POINTS.filter(function(p,i){ return log.debriefFive && log.debriefFive[i]; }).map(function(p){return p.t;});
+  if(log.debriefWell || log.debriefChange || dbFive.length){
+    sectionTitle('Debrief');
+    field('What went well', log.debriefWell);
+    field('What I would change', log.debriefChange);
+    if(dbFive.length) field('Five things used', dbFive.join(', '));
   }
 
   if(log.trainerSignoff){
@@ -739,7 +794,10 @@ function newLog(){
     trainerComments:'', handlerComments:'', goingForward:'',
     reward:'', ftr:'',
     photos:[], comments:[], gpx:null,
-    sketches:[], readiness:{},
+    sketches:[], readiness:{}, onground:{},
+    boundaryNotes:'', boundaryHazards:'', boundaryConfirmed:'',
+    timing:null, alerts:[],
+    debriefWell:'', debriefChange:'', debriefFive:{},
     objectivesMet:'', anyOtherComments:'',
     trainerSignoff:null
   };
@@ -773,6 +831,8 @@ function icon(name, size){
     x:'<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     gear:'<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M19.4 13.5a7.4 7.4 0 000-3l1.9-1.5-2-3.4-2.3.9a7.4 7.4 0 00-2.6-1.5L14 2.5h-4l-.4 2.5a7.4 7.4 0 00-2.6 1.5l-2.3-.9-2 3.4L4.6 10.5a7.4 7.4 0 000 3L2.7 15l2 3.4 2.3-.9c.8.7 1.6 1.2 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 002.6-1.5l2.3.9 2-3.4z" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"/>',
     lock:'<rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.8" fill="none"/>',
+    sun:'<circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    moon:'<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/>',
     pencil:'<path d="M4 20l1-4L16.5 4.5a2 2 0 013 0l0 0a2 2 0 010 3L8 19z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linejoin="round"/><path d="M14 7l3 3" stroke="currentColor" stroke-width="1.8"/>',
     map:'<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z M9 4v14 M15 6v14" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linejoin="round"/>',
     bulb:'<path d="M9 18h6M10 21h4M12 3a6 6 0 00-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0012 3z" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -824,15 +884,15 @@ function drawCompass(){
   function pt(deg){ var rad=(deg-90)*Math.PI/180; return [cx+r*Math.cos(rad), cy+r*Math.sin(rad)]; }
   var lines='';
   if(w.windDirDeg!=null){ var p=pt(w.windDirDeg); lines+='<line x1="'+cx+'" y1="'+cy+'" x2="'+p[0]+'" y2="'+p[1]+'" stroke="#5DA9E0" stroke-width="3" stroke-linecap="round"/><circle cx="'+p[0]+'" cy="'+p[1]+'" r="4" fill="#5DA9E0"/>'; }
-  if(w.sunAzimuthDeg!=null){ var p2=pt(w.sunAzimuthDeg); lines+='<line x1="'+cx+'" y1="'+cy+'" x2="'+p2[0]+'" y2="'+p2[1]+'" stroke="#FFD60A" stroke-width="3" stroke-linecap="round"/><circle cx="'+p2[0]+'" cy="'+p2[1]+'" r="4" fill="#FFD60A"/>'; }
+  if(w.sunAzimuthDeg!=null){ var p2=pt(w.sunAzimuthDeg); lines+='<line x1="'+cx+'" y1="'+cy+'" x2="'+p2[0]+'" y2="'+p2[1]+'" style="stroke:var(--sun)" stroke-width="3" stroke-linecap="round"/><circle cx="'+p2[0]+'" cy="'+p2[1]+'" r="4" style="fill:var(--sun)"/>'; }
   if(state.draft.gpx && state.draft.gpx.bearing!=null){ var p3=pt(state.draft.gpx.bearing); lines+='<line x1="'+cx+'" y1="'+cy+'" x2="'+p3[0]+'" y2="'+p3[1]+'" stroke="#FF6B00" stroke-width="3" stroke-dasharray="4 3" stroke-linecap="round"/>'; }
   return '<svg width="120" height="120" viewBox="0 0 120 120">'+
-    '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="rgba(224,225,221,0.25)" stroke-width="1.5"/>'+
+    '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" style="stroke:var(--neutral);stroke-opacity:.3" stroke-width="1.5"/>'+
     '<text x="60" y="10" fill="#8D93A6" font-size="10" text-anchor="middle">N</text>'+
     '<text x="60" y="116" fill="#8D93A6" font-size="10" text-anchor="middle">S</text>'+
     '<text x="6" y="63" fill="#8D93A6" font-size="10" text-anchor="middle">W</text>'+
     '<text x="114" y="63" fill="#8D93A6" font-size="10" text-anchor="middle">E</text>'+
-    lines+'<circle cx="'+cx+'" cy="'+cy+'" r="2.5" fill="#E0E1DD"/></svg>';
+    lines+'<circle cx="'+cx+'" cy="'+cy+'" r="2.5" style="fill:var(--neutral)"/></svg>';
 }
 
 /* ---------- GPX ---------- */
@@ -959,6 +1019,7 @@ function header(){
     '<div class="brand-title">Search Dog Log<span>NSARDA Suffolk</span></div></div>'+
     '<div style="display:flex;align-items:center;gap:10px;">'+
     (state.person ? '<div style="text-align:right;line-height:1.2;"><div style="font-size:13px;font-weight:700;">'+esc(state.person.name)+'</div><div style="font-size:10px;color:var(--neutral-dim);text-transform:uppercase;letter-spacing:0.05em;">'+roleLabel+'</div></div>' : '')+
+    '<button id="themeBtn" onclick="App.toggleTheme()" aria-label="Switch light or dark mode" title="Light / dark" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon(document.documentElement.getAttribute('data-theme')==='light'?'moon':'sun',20)+'</button>'+
     '<button onclick="App.goSettings()" aria-label="Settings" style="background:none;border:none;color:var(--neutral-dim);cursor:pointer;padding:4px;">'+icon('gear',20)+'</button>'+
     '</div></div>';
 }
@@ -1227,25 +1288,6 @@ function screenEdit(){
     micRow('trainingObjective', d.trainingObjective, 'What was this session aiming to achieve?', 'Training objective')
   ]);
 
-  body += readinessSection(d);
-
-  body += section('Trail &amp; hides', false, [
-    '<div class="row2"><div><label>Number of subjects / hides</label><input type="text" value="'+esc(d.numSubjects)+'" oninput="onDraftInput(\'numSubjects\',this.value)"></div>'+
-    '<div><label>Length / size of trail / area</label><input type="text" value="'+esc(d.trailSize)+'" oninput="onDraftInput(\'trailSize\',this.value)"></div></div>',
-    '<div class="row2"><div><label>Age of trail / hides</label><input type="text" value="'+esc(d.trailAge)+'" oninput="onDraftInput(\'trailAge\',this.value)"></div>'+
-    '<div><label>Number of turns / transitions</label><input type="text" value="'+esc(d.numTurns)+'" oninput="onDraftInput(\'numTurns\',this.value)"></div></div>'
-  ]);
-
-  body += section('Scent article', false, [
-    '<label>Scent article</label><input type="text" value="'+esc(d.scentArticle)+'" oninput="onDraftInput(\'scentArticle\',this.value)">',
-    '<label>Article type</label>'+seg('scentArticleType', d.scentArticleType, [{v:'known',l:'Known'},{v:'blind',l:'Blind'},{v:'doubleblind',l:'Double blind'},{v:'na',l:'N/A'}]),
-    '<div class="row2"><div><label>Scent specific</label>'+seg('scentSpecific', d.scentSpecific, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}])+'</div>'+
-    '<div><label>Trail</label>'+seg('trailYes', d.trailYes, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}])+'</div></div>',
-    '<label>Direction of travel confirmed?</label>'+seg('directionConfirmed', d.directionConfirmed, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}]),
-    '<div class="row2"><div><label>Time on trail / in area</label><input type="text" value="'+esc(d.timeOnTrail)+'" oninput="onDraftInput(\'timeOnTrail\',this.value)"></div>'+
-    '<div><label>Field tech</label><input type="text" value="'+esc(d.fieldTech)+'" oninput="onDraftInput(\'fieldTech\',this.value)"></div></div>'
-  ]);
-
   body += section('Weather &amp; direction', false, [
     '<div class="check-row"><input type="checkbox" id="indoorsChk" '+(d.weather.indoors?'checked':'')+' onchange="App.setWeatherField(\'indoors\',this.checked)"><label style="margin:0;" for="indoorsChk">Indoors (skip outdoor weather)</label></div>',
     !d.weather.indoors ? (
@@ -1265,6 +1307,33 @@ function screenEdit(){
     ) : '<div class="notice">Outdoor weather skipped &mdash; session marked indoors.</div>',
     '<label>Environment / conditions notes</label>',
     micRow('environmentConditions', d.environmentConditions, 'Open ground, side of a building used for one exercise...', null)
+  ]);
+
+  body += sketchSection(d);
+
+  body += boundariesSection(d);
+
+  body += readinessSection(d);
+
+  body += timerSection(d);
+
+  body += groundSection(d);
+
+  body += section('Trail &amp; hides', false, [
+    '<div class="row2"><div><label>Number of subjects / hides</label><input type="text" value="'+esc(d.numSubjects)+'" oninput="onDraftInput(\'numSubjects\',this.value)"></div>'+
+    '<div><label>Length / size of trail / area</label><input type="text" value="'+esc(d.trailSize)+'" oninput="onDraftInput(\'trailSize\',this.value)"></div></div>',
+    '<div class="row2"><div><label>Age of trail / hides</label><input type="text" value="'+esc(d.trailAge)+'" oninput="onDraftInput(\'trailAge\',this.value)"></div>'+
+    '<div><label>Number of turns / transitions</label><input type="text" value="'+esc(d.numTurns)+'" oninput="onDraftInput(\'numTurns\',this.value)"></div></div>'
+  ]);
+
+  body += section('Scent article', false, [
+    '<label>Scent article</label><input type="text" value="'+esc(d.scentArticle)+'" oninput="onDraftInput(\'scentArticle\',this.value)">',
+    '<label>Article type</label>'+seg('scentArticleType', d.scentArticleType, [{v:'known',l:'Known'},{v:'blind',l:'Blind'},{v:'doubleblind',l:'Double blind'},{v:'na',l:'N/A'}]),
+    '<div class="row2"><div><label>Scent specific</label>'+seg('scentSpecific', d.scentSpecific, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}])+'</div>'+
+    '<div><label>Trail</label>'+seg('trailYes', d.trailYes, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}])+'</div></div>',
+    '<label>Direction of travel confirmed?</label>'+seg('directionConfirmed', d.directionConfirmed, [{v:'yes',l:'Yes'},{v:'no',l:'No'},{v:'na',l:'N/A'}]),
+    '<div class="row2"><div><label>Time on trail / in area</label><input type="text" value="'+esc(d.timeOnTrail)+'" oninput="onDraftInput(\'timeOnTrail\',this.value)"></div>'+
+    '<div><label>Field tech</label><input type="text" value="'+esc(d.fieldTech)+'" oninput="onDraftInput(\'fieldTech\',this.value)"></div></div>'
   ]);
 
   body += section('Photos', false, [
@@ -1288,12 +1357,11 @@ function screenEdit(){
     d.gpx ? '<div style="font-size:12px;color:var(--neutral-dim);margin-top:8px;">'+esc(d.gpx.name)+' &middot; '+d.gpx.points.length+' points</div><div id="gpxMap"></div>' : ''
   ]);
 
-  body += sketchSection(d);
-
   body += section('Notes & summary', false, [
     '<label>Trainer comments</label>'+micRow('trainerComments', d.trainerComments, 'Trainer observations from the session...', null),
     '<label>Handler comments</label>'+micRow('handlerComments', d.handlerComments, 'How did it go from your side?', null),
     '<label>Going forward</label>'+micRow('goingForward', d.goingForward, 'Plans for next session...', null),
+    debriefParts(d),
     '<div class="row2"><div><label>Reward</label><input type="text" value="'+esc(d.reward)+'" oninput="onDraftInput(\'reward\',this.value)"></div>'+
     '<div><label>Final trained response (FTR)</label><input type="text" value="'+esc(d.ftr)+'" oninput="onDraftInput(\'ftr\',this.value)"></div></div>'
   ]);
@@ -1344,7 +1412,8 @@ function screenView(){
     body += '<div class="card"><div class="readonly-label">Photos</div><div class="thumbs">'+
       d.photos.map(function(p){return '<div class="thumb"><img src="'+p.dataUrl+'"></div>';}).join('')+'</div></div>';
   }
-  body += sketchViewCard(d) + readinessViewCard(d);
+  body += roField('Search area & boundaries', d.boundaryNotes) + roField('Hazards / no-go areas', d.boundaryHazards) + roField('Boundaries briefed and understood', d.boundaryConfirmed);
+  body += sketchViewCard(d) + readinessViewCard(d) + timingViewCard(d) + groundViewCard(d);
   if(d.gpx){
     body += '<div class="card"><div class="readonly-label">GPX track &mdash; '+esc(d.gpx.name)+'</div><div id="gpxMapView"></div></div>';
   }
@@ -1352,6 +1421,7 @@ function screenView(){
   body += roField('Trainer comments', d.trainerComments);
   body += roField('Handler comments', d.handlerComments);
   body += roField('Going forward', d.goingForward);
+  body += debriefViewCard(d);
   body += roField('Reward', d.reward) + roField('FTR', d.ftr);
   body += roField('Objectives met', d.objectivesMet) + roField('Any other comments', d.anyOtherComments);
 
@@ -1449,7 +1519,7 @@ function setupSignaturePad(){
   var canvas = document.getElementById('sigCanvas');
   if(!canvas) return;
   var ctx = canvas.getContext('2d');
-  ctx.strokeStyle='#E0E1DD'; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.strokeStyle='#3B82F6'; ctx.lineWidth=2.4; ctx.lineCap='round';
   var drawing=false, last=null;
   function pos(e){
     var rect=canvas.getBoundingClientRect();
@@ -1465,29 +1535,50 @@ function setupSignaturePad(){
 
 /* ---------- ready-to-search checklist ---------- */
 var READINESS_GROUPS = [
-  {title:'Me', items:[
-    {key:'me_check',  text:'Background check in date and ID card on me'},
-    {key:'me_brief',  text:'Tasking brief understood - who is in charge, what we are looking for'},
-    {key:'me_bounds', text:'Boundaries understood - search area, no-go zones, hazards, roads, water'},
-    {key:'me_comms',  text:'Radio / phone working, check-in times and stop-call agreed'},
-    {key:'me_dress',  text:'Dressed for the weather, fed, watered, own medication with me'},
-    {key:'me_plan',   text:'I know my plan: wind, edges, first leg'}
+  {title:'Task & weather', items:[
+    {key:'t_who',   text:'Who am I looking for? Profile, likely intent, time last seen'},
+    {key:'t_wind',  text:'Wind and thermals read - direction, strength, time-of-day airflow'}
   ]},
-  {title:'Dog', items:[
-    {key:'dog_fit',   text:'Dog fit, well and sound - no injuries, not unwell'},
-    {key:'dog_feed',  text:'Fed, watered and toileted at the right time before working'},
-    {key:'dog_docs',  text:'Insurance and vaccinations in date', hint:'docs'},
-    {key:'dog_kit',   text:'Working harness / ID on and fitted correctly'},
-    {key:'dog_ready', text:'Dog calm, focused and ready to work'}
+  {title:'Ground & plan', items:[
+    {key:'g_bounds', text:'Boundaries defined - fences, roads, ridgelines, grid lines'},
+    {key:'g_hazard', text:'Hazards for the dog identified and managed - livestock, water, wire, roads, cliffs'},
+    {key:'g_traps',  text:'Scent traps spotted - ditches, hollows, thickets, lee sides of walls'},
+    {key:'g_entry',  text:'Entry point and sweep plan - downwind edge, crosswind legs with overlap'},
+    {key:'g_nav',    text:'Navigator / support briefed (if I have one)'}
   ]},
-  {title:'Kit', items:[
-    {key:'kit_nav',   text:'Map, compass and phone / GPS charged'},
-    {key:'kit_light', text:'Head torch, whistle and spare batteries'},
-    {key:'kit_aid',   text:'First aid for me and for the dog'},
-    {key:'kit_water', text:'Water and bowl for the dog, water for me'},
-    {key:'kit_lead',  text:'Lead, long line and reward / toy'}
+  {title:'Dog & kit', items:[
+    {key:'d_dog',  text:'Dog fit, hydrated, working kit on (light / bell, harness, GPS collar)'},
+    {key:'d_kit',  text:'My kit: radio, GPS, compass / map, dog first aid, reward toy'}
+  ]},
+  {title:'Before you go', items:[
+    {key:'b_signin', text:'Control sign-in done - start time, radio check, expected completion window'},
+    {key:'b_admin',  text:'Background check, insurance and vaccinations all in date', hint:'docs'}
   ]}
 ];
+var GROUND_ITEMS = [
+  {key:'s_entry', text:'Entered at the downwind boundary or corner'},
+  {key:'s_wind',  text:'Re-checked the wind - still what I planned for?'},
+  {key:'s_legs',  text:'Crosswind legs with overlap - covering the ground, not chasing the dog'},
+  {key:'s_traps', text:'Scent traps given extra time'},
+  {key:'s_alert', text:'On an alert: hold position, log the time and place, report it'},
+  {key:'s_clear', text:'Sector complete or stood down - reported to Control, finish time logged'}
+];
+function groundCount(log){ var r=(log&&log.onground)||{}; return GROUND_ITEMS.filter(function(i){return r[i.key];}).length; }
+function groundSection(d){
+  var r = d.onground || {};
+  var rows = GROUND_ITEMS.map(function(it){
+    var on = !!r[it.key];
+    return '<label class="rd-row'+(on?' on':'')+'"><input type="checkbox" '+(on?'checked ':'')+'onchange="App.toggleGround(\''+it.key+'\',this)"><span>'+it.text+'</span></label>';
+  }).join('');
+  return section('<span>Search checklist<b class="rd-count" id="gdCount">'+groundCount(d)+'/'+GROUND_ITEMS.length+'</b></span>', false, ['<div style="font-size:12px;color:var(--neutral-dim);margin-bottom:4px;">Tick as you go, on the ground.</div>'+rows], 'ground');
+}
+function groundViewCard(d){
+  var r = d.onground || {}, n = groundCount(d);
+  if(!n) return '';
+  var left = GROUND_ITEMS.filter(function(i){return !r[i.key];});
+  return '<div class="card"><div class="readonly-label">Search checklist &mdash; '+n+' of '+GROUND_ITEMS.length+' ticked</div>'+
+    (left.length ? '<div style="font-size:13px;color:var(--neutral-dim);line-height:1.5;">Not ticked: '+left.map(function(k){return esc(k.text);}).join('; ')+'</div>' : '<div style="font-size:14px;">All ticked.</div>')+'</div>';
+}
 function readinessKeys(){
   var out=[]; READINESS_GROUPS.forEach(function(g){ g.items.forEach(function(i){ out.push(i); }); }); return out;
 }
@@ -1526,7 +1617,7 @@ function readinessSection(d){
     parts.push(h);
   });
   parts.push('<button type="button" class="btn btn-secondary btn-slim" style="margin-top:12px;" onclick="App.showStrategy()">'+icon('bulb',16)+' &nbsp;My 5 things to remember</button>');
-  return section('<span>Ready to search<b class="rd-count" id="rdCount">'+readinessCount(d)+'/'+total+'</b></span>', false, parts, 'ready');
+  return section('<span>Pre-search checklist<b class="rd-count" id="rdCount">'+readinessCount(d)+'/'+total+'</b></span>', false, parts, 'ready');
 }
 function readinessViewCard(d){
   var r = d.readiness || {};
@@ -1534,7 +1625,7 @@ function readinessViewCard(d){
   var n = keys.filter(function(k){return r[k.key];}).length;
   if(!n) return '';
   var left = keys.filter(function(k){return !r[k.key];});
-  return '<div class="card"><div class="readonly-label">Ready to search &mdash; '+n+' of '+keys.length+' ticked</div>'+
+  return '<div class="card"><div class="readonly-label">Pre-search checklist &mdash; '+n+' of '+keys.length+' ticked</div>'+
     (left.length ? '<div style="font-size:13px;color:var(--neutral-dim);line-height:1.5;">Not ticked: '+left.map(function(k){return esc(k.text);}).join('; ')+'</div>'
                  : '<div style="font-size:14px;">All checks ticked before the search.</div>')+'</div>';
 }
@@ -1722,6 +1813,71 @@ async function saveSketch(){
   showStrategy(true);
 }
 
+/* ---------- search area, timer, alerts, debrief ---------- */
+function fmtClock(ms){ return new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
+function fmtElapsed(ms){
+  var t = Math.max(0, Math.floor(ms/1000)), h = Math.floor(t/3600), m = Math.floor((t%3600)/60), sec = t%60;
+  function z(n){ return (n<10?'0':'')+n; }
+  return (h? h+':'+z(m) : z(m)) + ':' + z(sec);
+}
+function boundariesSection(d){
+  return section('Search area &amp; boundaries', false, [
+    micRow('boundaryNotes', d.boundaryNotes, 'Area as briefed: roads, water, fences, tracks, edges...', 'Search area &amp; boundaries'),
+    micRow('boundaryHazards', d.boundaryHazards, 'Hazards, no-go areas, other teams nearby...', 'Hazards &amp; no-go areas'),
+    '<label>Boundaries briefed and understood?</label>'+seg('boundaryConfirmed', d.boundaryConfirmed, [{v:'yes',l:'Yes'},{v:'no',l:'No'}])
+  ], 'bounds');
+}
+function timerSection(d){
+  var t = d.timing || {}, running = !!(t.start && !t.end);
+  var el = t.start ? fmtElapsed((t.end||Date.now())-t.start) : '00:00';
+  var sub = t.start ? 'Started '+fmtClock(t.start)+(t.end ? ' &middot; Finished '+fmtClock(t.end) : ' &middot; running') : 'Not started';
+  var btn = !t.start ? '<button type="button" class="btn btn-primary" onclick="App.startSearch()">Start search</button>'
+    : running ? '<button type="button" class="btn btn-danger" onclick="App.stopSearch()">Stop search</button>'
+    : '<button type="button" class="btn btn-secondary btn-slim" onclick="App.resetSearch()">Reset timer</button>';
+  var als = (d.alerts||[]).map(function(a){
+    return '<div class="al-row"><div><b>'+fmtClock(a.at)+(t.start?' (+'+fmtElapsed(a.at-t.start)+')':'')+'</b> '+esc(a.note||'Alert')+'</div><button onclick="App.removeAlert(\''+a.id+'\')">'+icon('x',14)+'</button></div>';
+  }).join('');
+  return section('<span>Search timer &amp; alerts'+(running?'<b class="rd-count">running</b>':'')+'</span>', false, [
+    '<div class="tm-big" id="tmrElapsed">'+el+'</div><div class="tm-sub">'+sub+'</div>'+btn,
+    '<label style="margin-top:16px;">Dog alerts / finds</label>'+
+    '<input type="text" placeholder="What did the dog do? (optional)" value="'+esc(state._alertNote||'')+'" oninput="App.setAlertNote(this.value)">'+
+    '<button type="button" class="btn btn-secondary btn-slim" onclick="App.logAlert()">+ Log alert now</button>'+
+    '<div style="margin-top:8px;">'+als+'</div>'
+  ], 'timer');
+}
+function timingViewCard(d){
+  var t = d.timing, out = '';
+  if(t && t.start){
+    out += '<div class="card"><div class="readonly-label">Search timing</div><div style="font-size:14px;">Started '+fmtClock(t.start)+
+      (t.end ? ' &middot; Finished '+fmtClock(t.end)+' &middot; <b>'+fmtElapsed(t.end-t.start)+'</b>' : ' &middot; not stopped')+'</div></div>';
+  }
+  if(d.alerts && d.alerts.length){
+    out += '<div class="card"><div class="readonly-label">Dog alerts / finds</div>'+d.alerts.map(function(a){
+      return '<div class="al-row"><div><b>'+fmtClock(a.at)+(t&&t.start?' (+'+fmtElapsed(a.at-t.start)+')':'')+'</b> '+esc(a.note||'Alert')+'</div></div>';
+    }).join('')+'</div>';
+  }
+  return out;
+}
+function debriefParts(d){
+  var five = d.debriefFive || {};
+  return '<label>Debrief &mdash; what went well</label>'+micRow('debriefWell', d.debriefWell, 'What worked today?', null)+
+    '<label>Debrief &mdash; what I would change</label>'+micRow('debriefChange', d.debriefChange, 'One thing to do differently next time...', null)+
+    '<label>Which of my five things did I use today?</label>'+
+    STRATEGY_POINTS.map(function(p,i){
+      var on = !!five[i];
+      return '<label class="rd-row'+(on?' on':'')+'"><input type="checkbox" '+(on?'checked ':'')+'onchange="App.toggleFive('+i+',this)"><span>'+p.t+'</span></label>';
+    }).join('');
+}
+function debriefViewCard(d){
+  var used = STRATEGY_POINTS.filter(function(p,i){return d.debriefFive && d.debriefFive[i];}).map(function(p){return p.t;});
+  return roField('Debrief: what went well', d.debriefWell) + roField('Debrief: what I would change', d.debriefChange) +
+    (used.length ? roField('Five things used', used.join(', ')) : '');
+}
+setInterval(function(){
+  var e = document.getElementById('tmrElapsed'), t = state.draft && state.draft.timing;
+  if(e && t && t.start && !t.end) e.textContent = fmtElapsed(Date.now()-t.start);
+}, 1000);
+
 /* ---------- the five things ---------- */
 var STRATEGY_POINTS = [
   {t:'Wind first', d:'Stop. Feel it, read it, mark it on the map. Your search is built around the wind, not around the map.'},
@@ -1823,6 +1979,13 @@ window.App = {
     await dbPut(STORE, state.draft);
   },
   removePhoto: function(id){ state.draft.photos = state.draft.photos.filter(function(p){return p.id!==id;}); render(); },
+  toggleTheme: function(){
+    var next = document.documentElement.getAttribute('data-theme')==='light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try{ localStorage.setItem('sdl_theme', next); }catch(e){}
+    var m = document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', next==='light' ? '#EEF1F6' : '#1B263B');
+    var b = document.getElementById('themeBtn'); if(b) b.innerHTML = icon(next==='light'?'moon':'sun', 20);
+  },
   secToggle: function(key, isOpen){ state._open = state._open||{}; state._open[key] = !!isOpen; },
   toggleReady: function(key, el){
     state.draft.readiness = state.draft.readiness||{};
@@ -1831,6 +1994,33 @@ window.App = {
     var c = document.getElementById('rdCount'); if(c) c.textContent = readinessCount(state.draft)+'/'+readinessKeys().length;
   },
   openSketch: function(){ openSketch(); },
+  toggleGround: function(key, el){
+    state.draft.onground = state.draft.onground||{};
+    if(el.checked) state.draft.onground[key] = true; else delete state.draft.onground[key];
+    var row = el.closest('.rd-row'); if(row) row.classList.toggle('on', el.checked);
+    var c = document.getElementById('gdCount'); if(c) c.textContent = groundCount(state.draft)+'/'+GROUND_ITEMS.length;
+  },
+  startSearch: async function(){ state.draft.timing = {start:Date.now(), end:null}; state._open=state._open||{}; state._open.timer=true; render(); try{ await dbPut(STORE, state.draft); }catch(e){} },
+  stopSearch: async function(){
+    var t = state.draft.timing; if(!t || !t.start || t.end) return;
+    t.end = Date.now();
+    if(!state.draft.timeOnTrail) state.draft.timeOnTrail = fmtElapsed(t.end - t.start);
+    render(); try{ await dbPut(STORE, state.draft); }catch(e){}
+  },
+  resetSearch: function(){ if(!confirm('Reset the timer? Start and finish times will be cleared.')) return; state.draft.timing = null; render(); },
+  setAlertNote: function(v){ state._alertNote = v; },
+  logAlert: async function(){
+    state.draft.alerts = state.draft.alerts||[];
+    state.draft.alerts.push({id:uid('al'), at:Date.now(), note:(state._alertNote||'').trim()});
+    state._alertNote=''; state._open=state._open||{}; state._open.timer=true; render();
+    try{ await dbPut(STORE, state.draft); }catch(e){}
+  },
+  removeAlert: function(id){ state.draft.alerts = (state.draft.alerts||[]).filter(function(a){return a.id!==id;}); render(); },
+  toggleFive: function(i, el){
+    state.draft.debriefFive = state.draft.debriefFive||{};
+    if(el.checked) state.draft.debriefFive[i]=true; else delete state.draft.debriefFive[i];
+    var row = el.closest('.rd-row'); if(row) row.classList.toggle('on', el.checked);
+  },
   removeSketch: function(id){
     if(!confirm('Delete this sketch?')) return;
     state.draft.sketches = (state.draft.sketches||[]).filter(function(x){return x.id!==id;});
