@@ -1,4 +1,4 @@
-var CACHE = 'k9fieldlog-v18';
+var CACHE = 'k9fieldlog-v19';
 var ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', function(e){
@@ -15,15 +15,21 @@ self.addEventListener('activate', function(e){
 
 self.addEventListener('fetch', function(e){
   var url = new URL(e.request.url);
-  if(url.origin === location.origin){
+  if(e.request.method==='GET' && url.origin === location.origin){
+    /* network first (so a new version shows on the very next open), cache as the offline fallback */
     e.respondWith(
-      caches.match(e.request).then(function(cached){
-        var fetchPromise = fetch(e.request).then(function(res){
+      new Promise(function(resolve, reject){
+        var done = false;
+        var timer = setTimeout(function(){ if(!done){ done = true; reject(new Error('slow network')); } }, 3500);
+        fetch(e.request).then(function(res){
+          if(done) return;
+          done = true; clearTimeout(timer);
           var resClone = res.clone();
           caches.open(CACHE).then(function(c){ c.put(e.request, resClone); });
-          return res;
-        }).catch(function(){ return cached; });
-        return cached || fetchPromise;
+          resolve(res);
+        }).catch(function(err){ if(!done){ done = true; clearTimeout(timer); reject(err); } });
+      }).catch(function(){
+        return caches.match(e.request).then(function(cached){ return cached || fetch(e.request); });
       })
     );
   }
