@@ -1,4 +1,4 @@
-var CACHE = 'k9fieldlog-v13';
+var CACHE = 'k9fieldlog-v11';
 var ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './icon-180.png'];
 
 self.addEventListener('install', function(e){
@@ -15,30 +15,17 @@ self.addEventListener('activate', function(e){
 
 self.addEventListener('fetch', function(e){
   var url = new URL(e.request.url);
-  if(url.origin !== location.origin) return; // cross-origin (map tiles, fonts, weather, storage) — network only
-
-  var isAppShell = e.request.mode==='navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('index.html');
-  if(isAppShell){
-    /* network-first for the app itself, so an update lands the next time you open it
-       with signal, instead of needing two reloads. Falls back to cache when offline. */
+  if(url.origin === location.origin){
     e.respondWith(
-      fetch(e.request).then(function(res){
-        var resClone = res.clone();
-        caches.open(CACHE).then(function(c){ c.put(e.request, resClone); });
-        return res;
-      }).catch(function(){ return caches.match(e.request); })
+      caches.match(e.request).then(function(cached){
+        var fetchPromise = fetch(e.request).then(function(res){
+          var resClone = res.clone();
+          caches.open(CACHE).then(function(c){ c.put(e.request, resClone); });
+          return res;
+        }).catch(function(){ return cached; });
+        return cached || fetchPromise;
+      })
     );
-    return;
   }
-
-  e.respondWith(
-    caches.match(e.request).then(function(cached){
-      var fetchPromise = fetch(e.request).then(function(res){
-        var resClone = res.clone();
-        caches.open(CACHE).then(function(c){ c.put(e.request, resClone); });
-        return res;
-      }).catch(function(){ return cached; });
-      return cached || fetchPromise;
-    })
-  );
+  /* cross-origin requests (map tiles, fonts, weather API) go straight to the network */
 });
