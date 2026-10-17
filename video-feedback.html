@@ -32,9 +32,15 @@ h2 .n{width:26px;height:26px;border-radius:50%;background:var(--orange);color:#f
 .card{background:var(--navy-2);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px;}
 label.l{display:block;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin:14px 0 8px;}
 h2 + label.l{margin-top:0;}
-input[type=text],input[type=password],textarea{width:100%;background:var(--navy);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:14px;font:inherit;font-size:16px;}
+input[type=text],input[type=password],input[type=number],textarea{width:100%;background:var(--navy);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:14px;font:inherit;font-size:16px;}
 textarea{min-height:110px;resize:vertical;}
 input:focus,textarea:focus,button:focus-visible,.pick:focus-within{outline:2px solid var(--orange);outline-offset:2px;}
+.more{margin-top:16px;border-top:1px solid var(--line);padding-top:12px;}
+.more summary,#rulesDetails summary{cursor:pointer;font-weight:600;min-height:40px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;}
+.opt{font-weight:400;color:var(--dim);font-size:13px;}
+.chips{display:flex;gap:8px;flex-wrap:wrap;}
+.chips button{min-height:40px;padding:0 14px;background:var(--navy);color:var(--dim);border:1px solid var(--line);border-radius:999px;font:inherit;font-size:14px;cursor:pointer;}
+.chips button[aria-pressed=true]{background:var(--orange);border-color:var(--orange);color:#fff;}
 .seg{display:flex;gap:8px;flex-wrap:wrap;}
 .seg button{flex:1;min-width:92px;min-height:48px;background:var(--navy);color:var(--dim);border:1px solid var(--line);border-radius:12px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;}
 .seg button[aria-pressed=true]{background:var(--orange);border-color:var(--orange);color:#fff;}
@@ -138,6 +144,26 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
         </div>
         <label class="l" for="notes">What was the search, and what do you want feedback on?</label>
         <textarea id="notes" placeholder="e.g. 40 minute search of mixed woodland, wind from the south-west, two bodies. I want to know about my dog's ranging and how I covered the area."></textarea>
+
+        <details class="more" id="moreDetails">
+          <summary>More about the conditions <span class="opt">(optional, helps the feedback)</span></summary>
+          <label class="l" for="objective">Training objective</label>
+          <input id="objective" type="text" autocomplete="off" placeholder="e.g. Runaways, handler not running in">
+          <label class="l" for="bodies">Number of bodies / hides</label>
+          <input id="bodies" type="number" min="0" max="4" inputmode="numeric" placeholder="0 to 4">
+          <label class="l">Area</label>
+          <div class="chips" id="chArea" data-single="1"></div>
+          <label class="l">Wind</label>
+          <div class="chips" id="chWind"></div>
+          <label class="l">Weather</label>
+          <div class="chips" id="chWeather"></div>
+          <label class="l">Temperature</label>
+          <div class="chips" id="chTemp"></div>
+          <label class="l">Terrain</label>
+          <div class="chips" id="chTerrain"></div>
+          <label class="l" for="lastTime">Last time or what you're working on</label>
+          <textarea id="lastTime" placeholder="e.g. Barney alerted but didn't come back to get me. I'm working on slowing down and being clearer."></textarea>
+        </details>
       </div>
 
       <div class="card">
@@ -170,6 +196,21 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
         <label class="l">Notes at points in the video</label>
         <div id="tnotes"></div>
         <p class="small" id="tnotesEmpty">Pause the video where you want to comment, then tap "Add a note at this point in the video" above. A picture of that moment is saved with your note.</p>
+      </div>
+
+      <div class="card" id="rulesCard">
+        <details id="rulesDetails">
+          <summary><b>How the AI reviews your video</b> <span class="opt">(review rules)</span></summary>
+          <p class="small" id="rulesInfo">Loading…</p>
+          <textarea id="rulesText" style="min-height:260px" spellcheck="true"></textarea>
+          <div id="rulesBtns" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px" hidden>
+            <button id="rulesSave" class="btn primary sm" type="button">Save rules for everyone</button>
+            <button id="rulesReset" class="btn ghost sm" type="button">Reset to default</button>
+          </div>
+          <p class="ok" id="rulesMsg" hidden></p>
+          <label class="l" for="extra">Extra instructions for this video only <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+          <textarea id="extra" placeholder="e.g. Focus on handler positioning. This was a Regrade, so be stricter on coverage."></textarea>
+        </details>
       </div>
 
       <button id="go" class="btn primary" type="button" disabled>Get feedback</button>
@@ -253,6 +294,72 @@ function segValue(id){
 }
 ['segDiscipline','segTerrain','segLevel'].forEach(wireSeg);
 
+/* ---------- conditions chips (same lists as the NSARDA Area Details sheet) ---------- */
+var CHIP_SETS = {
+  chArea: ['Mountainside','Lowland','Urban'],
+  chWind: ['Light','Moderate','Strong','Steady','Variable','Gusting'],
+  chWeather: ['Wet','Good vis','Poor vis','Snowing','Stormy'],
+  chTemp: ['Cold','Average','Freezing','Warm','Hot','Humid'],
+  chTerrain: ['Marsh / wet','Gorse','Deep bracken','Ice','Forest / woodland','Crags','Tarmac / concrete','Grassland','Deep heather','Snow','Boulder field','Moorland']
+};
+Object.keys(CHIP_SETS).forEach(function(id){
+  var box = $(id), single = box.getAttribute('data-single') === '1';
+  box.innerHTML = CHIP_SETS[id].map(function(v){ return '<button type="button" aria-pressed="false" data-v="' + esc(v) + '">' + esc(v) + '</button>'; }).join('');
+  box.addEventListener('click', function(e){
+    var b = e.target.closest('button'); if(!b) return;
+    var was = b.getAttribute('aria-pressed') === 'true';
+    if(single) Array.prototype.forEach.call(box.children, function(x){ x.setAttribute('aria-pressed','false'); });
+    b.setAttribute('aria-pressed', was ? 'false' : 'true');
+  });
+});
+function chipValues(id){
+  return Array.prototype.map.call($(id).querySelectorAll('[aria-pressed=true]'), function(b){ return b.getAttribute('data-v'); });
+}
+
+/* ---------- review rules (saved in Supabase through the function) ---------- */
+var rulesState = { loaded: false, canEdit: false, defaultRules: '', saved: '' };
+async function callFunction(body){
+  var res = await fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + SUPABASE_ANON_KEY, apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify(Object.assign({ accessCode: state.code }, body))
+  });
+  var data = await res.json().catch(function(){ return {}; });
+  if(!res.ok) throw new Error(data.error || ('Error ' + res.status));
+  return data;
+}
+function rulesMsg(t, bad){ var m = $('rulesMsg'); m.textContent = t || ''; m.style.color = bad ? 'var(--danger)' : ''; show(m, !!t); }
+async function loadRules(){
+  $('rulesInfo').textContent = 'Loading…';
+  try{
+    var r = await callFunction({ action: 'getRules' });
+    rulesState = { loaded: true, canEdit: !!r.canEdit, defaultRules: r.defaultRules || '', saved: r.rules };
+    $('rulesText').value = r.rules;
+    $('rulesText').readOnly = !r.canEdit;
+    show($('rulesBtns'), !!r.canEdit);
+    var who = r.isDefault ? 'These are the starting rules. Nobody has saved their own yet.' :
+      ('Last saved' + (r.updatedBy ? ' by ' + r.updatedBy : '') + (r.updatedAt ? ' on ' + new Date(r.updatedAt).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'}) : '') + '.');
+    $('rulesInfo').textContent = who + (r.canEdit ? ' You can edit these and they apply to everyone.' : ' Only assessors and admins can change them. You can add extra instructions for this video below.');
+  }catch(e){
+    $('rulesInfo').textContent = "Couldn't load the rules (" + e.message + "). The feedback will still use the saved rules.";
+  }
+}
+$('rulesSave').addEventListener('click', async function(){
+  var btn = $('rulesSave'); btn.disabled = true; rulesMsg('');
+  try{
+    await callFunction({ action: 'saveRules', rules: $('rulesText').value });
+    rulesState.saved = $('rulesText').value;
+    rulesMsg('Saved. Everyone gets these rules from now on.');
+    loadRules();
+  }catch(e){ rulesMsg(e.message, true); }
+  finally{ btn.disabled = false; }
+});
+$('rulesReset').addEventListener('click', function(){
+  if(!rulesState.defaultRules) return;
+  $('rulesText').value = rulesState.defaultRules;
+  rulesMsg('Default rules put back in the box. Tap Save to keep them.');
+});
+
 /* ---------- login ---------- */
 async function tryLogin(code, silent){
   if(!code){ if(!silent) showLoginErr('Enter your access code.'); return false; }
@@ -267,6 +374,7 @@ async function tryLogin(code, silent){
     try{ localStorage.setItem('vf_code', code); }catch(e){}
     $('whoName').textContent = state.person.name || 'Signed in';
     show($('who'), true); show($('login'), false); show($('app'), true);
+    loadRules();
     return true;
   }catch(e){
     if(!silent) showLoginErr('Could not reach the server. Check your connection.');
@@ -412,6 +520,15 @@ async function getFeedback(){
           terrainGrading: segValue('segTerrain'),
           level: segValue('segLevel'),
           handlerNotes: $('notes').value.trim(),
+          trainingObjective: $('objective').value.trim(),
+          numberOfBodies: $('bodies').value.trim(),
+          area: chipValues('chArea').join(', '),
+          wind: chipValues('chWind').join(', '),
+          weather: chipValues('chWeather').join(', '),
+          temperature: chipValues('chTemp').join(', '),
+          terrain: chipValues('chTerrain').join(', '),
+          lastTimeOrWorkingOn: $('lastTime').value.trim(),
+          extraInstructions: $('extra').value.trim(),
           videoLengthSeconds: Math.round(out.duration)
         }
       })
@@ -629,6 +746,9 @@ function buildPdf(){
   if(state.person && state.person.name) det.push(['Prepared by', state.person.name]);
   var disc = segValue('segDiscipline'); if(disc) det.push(['Discipline', disc]);
   var grade = [segValue('segTerrain'), segValue('segLevel')].filter(Boolean).join(' / '); if(grade) det.push(['Grading', grade]);
+  var obj = $('objective').value.trim(); if(obj) det.push(['Objective', obj]);
+  var cond = [chipValues('chWind').length ? 'Wind: ' + chipValues('chWind').join(', ') : '', chipValues('chWeather').length ? 'Weather: ' + chipValues('chWeather').join(', ') : '', chipValues('chTemp').length ? 'Temp: ' + chipValues('chTemp').join(', ') : '', chipValues('chTerrain').length ? 'Terrain: ' + chipValues('chTerrain').join(', ') : ''].filter(Boolean).join('; ');
+  if(cond) det.push(['Conditions', cond]);
   if(state.file) det.push(['Video', state.file.name + (state.duration ? '  (' + fmt(state.duration) + ')' : '')]);
   det.forEach(function(d){
     need(7);
