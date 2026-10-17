@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tus-js-client@4.1.0/dist/tus.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 :root{
   --navy:#1B263B; --navy-2:#25334C; --navy-3:#324562; --orange:#FF6B00; --yellow:#FFD60A;
@@ -71,8 +72,17 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
 .obs button{flex:none;min-width:64px;min-height:40px;background:var(--navy);border:1px solid var(--orange);color:var(--orange);border-radius:10px;font:inherit;font-weight:700;cursor:pointer;}
 .limits{font-size:13px;color:var(--dim);margin:0;}
 .small{font-size:12.5px;color:var(--dim);margin:10px 0 0;}
+.btn.sm{min-height:48px;font-size:15px;margin-top:12px;}
+.thumb{display:block;width:100%;max-width:220px;border-radius:10px;margin-top:10px;border:1px solid var(--line);}
+.obs .txt{flex:1;min-width:0;}
+.tnote{border-top:1px solid var(--line);padding:14px 0 0;margin-top:14px;}
+.tnote:first-child{border-top:0;padding-top:0;margin-top:0;}
+.tnote .head{display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.tnote .head button.t{min-width:64px;min-height:40px;background:var(--navy);border:1px solid var(--orange);color:var(--orange);border-radius:10px;font:inherit;font-weight:700;cursor:pointer;}
+.tnote .head button.x{background:none;border:0;color:var(--dim);font:inherit;font-size:13px;padding:10px 0 10px 10px;cursor:pointer;}
+.tnote textarea{margin-top:10px;min-height:76px;}
+.ok{color:var(--yellow);font-size:13px;margin:10px 0 0;}
 [hidden]{display:none!important;}
-@media(min-width:520px){.two{grid-template-columns:1fr 1fr;gap:14px;}}
 </style>
 </head>
 <body>
@@ -140,6 +150,8 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
         <div id="previewBox" hidden style="margin-top:14px">
           <video id="preview" controls playsinline preload="metadata"></video>
           <p class="meta" id="fileMeta"></p>
+          <button id="addNote" class="btn ghost sm" type="button">+ Add a note at this point in the video</button>
+          <p class="ok" id="noteOk" hidden></p>
         </div>
         <label class="check">
           <input id="keep" type="checkbox" checked>
@@ -149,6 +161,15 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
           <div class="bar"><i id="upBar"></i></div>
           <p class="small" id="upText"></p>
         </div>
+      </div>
+
+      <div class="card" id="notesCard" hidden>
+        <h2><span class="n">3</span>Your notes <span style="font-weight:400;color:var(--dim)">(optional)</span></h2>
+        <label class="l" for="myNotes">General notes</label>
+        <textarea id="myNotes" placeholder="Anything you want to add or remember, such as what you'd do differently next time."></textarea>
+        <label class="l">Notes at points in the video</label>
+        <div id="tnotes"></div>
+        <p class="small" id="tnotesEmpty">Pause the video where you want to comment, then tap "Add a note at this point in the video" above. A picture of that moment is saved with your note.</p>
       </div>
 
       <button id="go" class="btn primary" type="button" disabled>Get feedback</button>
@@ -181,7 +202,9 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:60v
           <p class="limits" id="limits"></p>
         </div>
 
-        <button id="share" class="btn ghost" type="button">Share or copy this feedback</button>
+        <button id="pdf" class="btn primary" type="button">Save as PDF</button>
+        <button id="share" class="btn ghost sm" type="button">Share or copy as text</button>
+        <p class="small" id="pdfMsg" style="text-align:center">Your notes stay on this page until you close it, so save the PDF before you leave.</p>
       </section>
     </section>
   </main>
@@ -206,7 +229,8 @@ var BANDS = {10:'Perfect',9:'Excellent',8:'Extremely Good',7:'Very Good',6:'Good
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 var $ = function(id){ return document.getElementById(id); };
 
-var state = { person: null, code: '', file: null, objectUrl: null, duration: 0, busy: false, last: null };
+var state = { person: null, code: '', file: null, objectUrl: null, duration: 0, busy: false, last: null, frames: [], dims: null };
+var timedNotes = []; /* the handler's own notes: { id, t, text, img, w, h } */
 
 function show(el, on){ el.hidden = !on; }
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -273,6 +297,9 @@ $('file').addEventListener('change', function(e){
   $('fileMeta').textContent = f.name + ' · ' + (f.size/1048576).toFixed(0) + ' MB';
   show($('previewBox'), true);
   show($('results'), false); setError(''); setStatus('');
+  state.frames = []; state.dims = null; state.last = null;
+  timedNotes = []; renderTimedNotes();
+  show($('notesCard'), true);
   $('go').disabled = false;
 });
 $('preview').addEventListener('loadedmetadata', function(){
@@ -315,7 +342,7 @@ async function extractFrames(url, onProgress){
       frames.push({ t: t, data: c.toDataURL('image/jpeg', 0.7).split(',')[1] });
       onProgress(i + 1, count);
     }
-    return { frames: frames, duration: dur };
+    return { frames: frames, duration: dur, w: c.width, h: c.height };
   } finally {
     v.removeAttribute('src'); v.load(); v.remove();
   }
@@ -370,6 +397,7 @@ async function getFeedback(){
       throw new Error("This browser couldn't read that video to take pictures from it. On iPhone, use Safari. On a computer, an MP4 file works best.");
     }
 
+    state.frames = out.frames; state.dims = { w: out.w, h: out.h };
     setStatus('Getting feedback… this can take up to a minute');
     var res = await fetch(FUNCTION_URL, {
       method: 'POST',
@@ -422,7 +450,9 @@ function renderResults(r){
   var obs = (r.observations || []).filter(function(o){ return o && typeof o.t === 'number'; })
     .sort(function(a, b){ return a.t - b.t; });
   $('obs').innerHTML = obs.map(function(o){
-    return '<div class="obs"><button type="button" data-t="' + o.t + '">' + fmt(o.t) + '</button><div>' + esc(o.note || '') + '</div></div>';
+    var f = frameFor(o.t);
+    return '<div class="obs"><button type="button" data-t="' + o.t + '">' + fmt(o.t) + '</button><div class="txt">' + esc(o.note || '') +
+      (f ? '<img class="thumb" alt="Frame at ' + fmt(f.t) + '" src="data:image/jpeg;base64,' + f.data + '">' : '') + '</div></div>';
   }).join('');
   show($('obsCard'), obs.length > 0);
   $('limits').textContent = r.limits || 'Only still pictures were reviewed, so movement, speed and sound could not be judged.';
@@ -435,27 +465,271 @@ $('obs').addEventListener('click', function(e){
   $('previewBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
 
-/* ---------- share / copy ---------- */
-$('share').addEventListener('click', async function(){
-  var r = state.last; if(!r) return;
+/* nearest extracted frame to a time, if there is one within a few seconds */
+function frameFor(t){
+  var best = null, bd = 1e9;
+  (state.frames || []).forEach(function(f){ var d = Math.abs(f.t - t); if(d < bd){ bd = d; best = f; } });
+  return best && bd <= 5 ? best : null;
+}
+
+/* ---------- the handler's own notes ---------- */
+function snapshotPreview(){
+  var v = $('preview');
+  if(!v.videoWidth) return null;
+  var s = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
+  var c = document.createElement('canvas');
+  c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s);
+  try{
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    return { data: c.toDataURL('image/jpeg', 0.7).split(',')[1], w: c.width, h: c.height };
+  }catch(e){ return null; }
+}
+function renderTimedNotes(focusId){
+  var box = $('tnotes');
+  box.innerHTML = timedNotes.map(function(n){
+    return '<div class="tnote" data-id="' + n.id + '"><div class="head"><button type="button" class="t" data-t="' + n.t + '">' + fmt(n.t) + '</button>' +
+      '<button type="button" class="x" data-del="' + n.id + '">Remove</button></div>' +
+      (n.img ? '<img class="thumb" alt="Picture at ' + fmt(n.t) + '" src="data:image/jpeg;base64,' + n.img + '">' : '') +
+      '<textarea data-id="' + n.id + '" placeholder="Your note about this moment">' + esc(n.text) + '</textarea></div>';
+  }).join('');
+  show($('tnotesEmpty'), timedNotes.length === 0);
+  if(focusId){ var ta = box.querySelector('textarea[data-id="' + focusId + '"]'); if(ta) ta.focus({ preventScroll: true }); }
+}
+$('addNote').addEventListener('click', function(){
+  var v = $('preview'); v.pause();
+  var snap = snapshotPreview();
+  var n = { id: 'n' + Date.now().toString(36), t: v.currentTime || 0, text: '', img: snap && snap.data, w: snap && snap.w, h: snap && snap.h };
+  timedNotes.push(n);
+  timedNotes.sort(function(a, b){ return a.t - b.t; });
+  renderTimedNotes();
+  $('noteOk').textContent = 'Note added at ' + fmt(n.t) + '. Find it under "Your notes" below.';
+  show($('noteOk'), true);
+});
+$('tnotes').addEventListener('input', function(e){
+  var ta = e.target.closest('textarea[data-id]'); if(!ta) return;
+  var n = timedNotes.filter(function(x){ return x.id === ta.getAttribute('data-id'); })[0];
+  if(n) n.text = ta.value;
+});
+$('tnotes').addEventListener('click', function(e){
+  var del = e.target.closest('button[data-del]');
+  if(del){ timedNotes = timedNotes.filter(function(x){ return x.id !== del.getAttribute('data-del'); }); renderTimedNotes(); return; }
+  var tb = e.target.closest('button[data-t]');
+  if(tb){ $('preview').currentTime = parseFloat(tb.getAttribute('data-t')); $('previewBox').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+});
+
+/* ---------- plain text version (share / copy) ---------- */
+function composeText(){
+  var r = state.last; if(!r) return '';
   var lines = ['NSARDA video feedback (provisional AI suggestion from still frames, not an NSARDA result)', ''];
   if($('dog').value.trim()) lines.push('Dog: ' + $('dog').value.trim());
   lines.push(r.summary || '', '');
   SCORE_FIELDS.forEach(function(f){
     var s = r.scores && r.scores[f[0]];
-    if(s) lines.push(f[1] + ': ' + s.score + '/10 – ' + (s.note || ''));
+    if(s) lines.push(f[1] + ': ' + s.score + '/10 - ' + (s.note || ''));
   });
   if(r.observations && r.observations.length){
     lines.push('', 'Worth watching again:');
-    r.observations.forEach(function(o){ lines.push(fmt(o.t) + ' – ' + o.note); });
+    r.observations.forEach(function(o){ lines.push(fmt(o.t) + ' - ' + o.note); });
+  }
+  var mine = $('myNotes').value.trim();
+  if(mine || timedNotes.length){
+    lines.push('', 'My notes:');
+    if(mine) lines.push(mine);
+    timedNotes.forEach(function(n){ lines.push(fmt(n.t) + ' - ' + (n.text.trim() || '(no text)')); });
   }
   if(r.limits) lines.push('', r.limits);
-  var text = lines.join('\n');
+  return lines.join('\n');
+}
+$('share').addEventListener('click', async function(){
+  var text = composeText(); if(!text) return;
   try{
     if(navigator.share){ await navigator.share({ title: 'Video feedback', text: text }); return; }
   }catch(e){ if(e && e.name === 'AbortError') return; }
-  try{ await navigator.clipboard.writeText(text); $('share').textContent = 'Copied to clipboard'; setTimeout(function(){ $('share').textContent = 'Share or copy this feedback'; }, 2500); }
+  try{ await navigator.clipboard.writeText(text); $('share').textContent = 'Copied to clipboard'; setTimeout(function(){ $('share').textContent = 'Share or copy as text'; }, 2500); }
   catch(e){ window.prompt('Copy this feedback:', text); }
+});
+
+/* ---------- PDF ---------- */
+function clean(s){
+  /* the built-in PDF fonts only cover basic Latin, so swap or drop anything else */
+  return String(s == null ? '' : s)
+    .replace(/[‘’‛]/g, "'").replace(/[“”]/g, '"')
+    .replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/→/g, '->')
+    .replace(/≈/g, '~').replace(/×/g, 'x').replace(/[  ]/g, ' ')
+    .replace(/[^\x20-\x7E\n¡-ÿ]/g, '');
+}
+function buildPdf(){
+  var J = window.jspdf && window.jspdf.jsPDF;
+  if(!J) throw new Error('pdflib');
+  var r = state.last;
+  var doc = new J({ unit: 'mm', format: 'a4' });
+  var W = 210, H = 297, M = 16, CW = W - 2 * M, y = 0;
+  var NAVY = [27, 38, 59], ORANGE = [255, 107, 0], DIM = [105, 113, 130], INK = [30, 36, 50], LINE = [218, 221, 228];
+  var PT = 0.3528;
+
+  function need(h){ if(y + h > H - 20){ doc.addPage(); y = M; } }
+  function para(str, size, bold, color, x, w){
+    doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); doc.setTextColor(color[0], color[1], color[2]);
+    var lh = size * PT * 1.38;
+    doc.splitTextToSize(clean(str), w).forEach(function(l){ need(lh); doc.text(l, x, y + size * PT * 0.85); y += lh; });
+  }
+  function textHeight(str, size, w, bold){
+    doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+    return doc.splitTextToSize(clean(str), w).length * size * PT * 1.38;
+  }
+  function heading(label){
+    need(16); y += 5;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(ORANGE[0], ORANGE[1], ORANGE[2]);
+    doc.text(clean(label).toUpperCase(), M, y + 3); y += 5.5;
+    doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(0.3); doc.line(M, y, W - M, y); y += 4;
+  }
+  function thumbSize(w, h){
+    var th = 38, tw = th * w / h;
+    if(tw > 50){ tw = 50; th = tw * h / w; }
+    return { w: tw, h: th };
+  }
+  function momentRow(t, text, img, iw, ih, whoLabel){
+    var ts = img && iw && ih ? thumbSize(iw, ih) : null;
+    var tx = ts ? M + ts.w + 5 : M, tw = CW - (ts ? ts.w + 5 : 0);
+    var label = fmt(t) + (whoLabel ? '  ' + whoLabel : '');
+    var th = 6 + textHeight(text, 10, tw);
+    var rowH = Math.max(th, ts ? ts.h : 0);
+    need(rowH + 4);
+    if(ts) doc.addImage('data:image/jpeg;base64,' + img, 'JPEG', M, y, ts.w, ts.h);
+    var yy = y;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(ORANGE[0], ORANGE[1], ORANGE[2]);
+    doc.text(label, tx, yy + 4);
+    y = yy + 6;
+    para(text, 10, false, INK, tx, tw);
+    y = yy + rowH + 4;
+  }
+
+  /* header band */
+  doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]); doc.rect(0, 0, W, 32, 'F');
+  doc.setFillColor(ORANGE[0], ORANGE[1], ORANGE[2]); doc.rect(0, 32, W, 1.4, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(21);
+  doc.text('Video Feedback', M, 15);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(200, 205, 215);
+  doc.text('NSARDA Suffolk', M, 22);
+  var today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+  doc.text(today, W - M, 15, { align: 'right' });
+  y = 41;
+
+  /* provisional banner */
+  var bannerText = 'Provisional AI suggestion made from still pictures taken from the video. It is not an NSARDA result. An assessor confirms every score.';
+  var bh = textHeight(bannerText, 9.5, CW - 8, true) + 6;
+  doc.setFillColor(255, 245, 207); doc.setDrawColor(235, 205, 90); doc.setLineWidth(0.3);
+  doc.roundedRect(M, y, CW, bh, 2, 2, 'FD');
+  var yb = y; y += 3; para(bannerText, 9.5, true, [112, 84, 0], M + 4, CW - 8); y = yb + bh + 5;
+
+  /* details */
+  var det = [];
+  var dog = $('dog').value.trim();
+  if(dog) det.push(['Dog', dog]);
+  if(state.person && state.person.name) det.push(['Prepared by', state.person.name]);
+  var disc = segValue('segDiscipline'); if(disc) det.push(['Discipline', disc]);
+  var grade = [segValue('segTerrain'), segValue('segLevel')].filter(Boolean).join(' / '); if(grade) det.push(['Grading', grade]);
+  if(state.file) det.push(['Video', state.file.name + (state.duration ? '  (' + fmt(state.duration) + ')' : '')]);
+  det.forEach(function(d){
+    need(7);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(DIM[0], DIM[1], DIM[2]); doc.text(clean(d[0]).toUpperCase(), M, y + 4);
+    var yy = y;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10.5); doc.setTextColor(INK[0], INK[1], INK[2]);
+    var lines = doc.splitTextToSize(clean(d[1]), CW - 34);
+    lines.forEach(function(l, i){ doc.text(l, M + 34, yy + 4 + i * 5); });
+    y = yy + Math.max(7, lines.length * 5 + 2);
+  });
+  var about = $('notes').value.trim();
+  if(about){ heading('The search'); para(about, 10.5, false, INK, M, CW); }
+
+  /* overall */
+  heading('Overall');
+  para(r.summary || 'No overall summary was returned.', 10.5, false, INK, M, CW);
+
+  /* scores */
+  heading('Performance categories');
+  SCORE_FIELDS.forEach(function(f){
+    var s = r.scores && r.scores[f[0]];
+    if(!s || typeof s.score !== 'number') return;
+    var n = Math.max(0, Math.min(10, Math.round(s.score)));
+    var tw = CW - 24;
+    var rowH = 6 + textHeight(s.note || '', 10, tw) + 5;
+    need(Math.max(rowH, 18) + 3);
+    var yy = y;
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(ORANGE[0], ORANGE[1], ORANGE[2]);
+    doc.text(String(n), M + 8, yy + 9, { align: 'center' });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(DIM[0], DIM[1], DIM[2]);
+    doc.text(clean(BANDS[n]), M + 8, yy + 13.5, { align: 'center' });
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(INK[0], INK[1], INK[2]);
+    doc.text(clean(f[1]), M + 24, yy + 4);
+    y = yy + 6;
+    para(s.note || '', 10, false, INK, M + 24, tw);
+    doc.setFillColor(232, 235, 240); doc.roundedRect(M + 24, y + 0.5, 60, 1.8, 0.9, 0.9, 'F');
+    if(n > 0){ doc.setFillColor(ORANGE[0], ORANGE[1], ORANGE[2]); doc.roundedRect(M + 24, y + 0.5, 60 * n / 10, 1.8, 0.9, 0.9, 'F'); }
+    y = Math.max(y + 5, yy + 18) + 2;
+  });
+
+  /* moments worth watching again */
+  var obs = (r.observations || []).filter(function(o){ return o && typeof o.t === 'number'; }).sort(function(a, b){ return a.t - b.t; });
+  if(obs.length){
+    heading('Worth watching again');
+    obs.forEach(function(o){
+      var f = frameFor(o.t);
+      momentRow(o.t, o.note || '', f && f.data, state.dims && state.dims.w, state.dims && state.dims.h, '');
+    });
+  }
+
+  /* the handler's own notes */
+  var mine = $('myNotes').value.trim();
+  if(mine || timedNotes.length){
+    heading('My notes');
+    if(mine){ para(mine, 10.5, false, INK, M, CW); y += 3; }
+    timedNotes.forEach(function(n){ momentRow(n.t, n.text.trim() || '(no text)', n.img, n.w, n.h, ''); });
+  }
+
+  /* limits */
+  heading("What this can't tell you");
+  para(r.limits || 'Only still pictures were reviewed, so movement, speed and sound could not be judged.', 10, false, DIM, M, CW);
+
+  /* footer on every page */
+  var pages = doc.getNumberOfPages();
+  for(var p = 1; p <= pages; p++){
+    doc.setPage(p);
+    doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(0.3); doc.line(M, H - 14, W - M, H - 14);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(DIM[0], DIM[1], DIM[2]);
+    doc.text('Provisional AI suggestion from still frames. Not an NSARDA result.', M, H - 9);
+    doc.text('Page ' + p + ' of ' + pages, W - M, H - 9, { align: 'right' });
+  }
+
+  var stamp = new Date().toISOString().slice(0, 10);
+  var who = (dog || 'search').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '') || 'search';
+  return { blob: doc.output('blob'), name: 'video-feedback-' + who + '-' + stamp + '.pdf' };
+}
+$('pdf').addEventListener('click', async function(){
+  if(!state.last) return;
+  var btn = $('pdf'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Making your PDF…';
+  setError('');
+  try{
+    await new Promise(function(r){ setTimeout(r, 30); });
+    var out = buildPdf();
+    var file = new File([out.blob], out.name, { type: 'application/pdf' });
+    var touch = window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
+    if(touch && navigator.canShare && navigator.canShare({ files: [file] })){
+      try{ await navigator.share({ files: [file], title: 'Video feedback' }); return; }
+      catch(e){ if(e && e.name === 'AbortError') return; }
+    }
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(out.blob); a.download = out.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 30000);
+  }catch(e){
+    setError(e && e.message === 'pdflib'
+      ? "The PDF tool didn't load. Check your connection, reload the page and try again."
+      : 'Could not make the PDF: ' + ((e && e.message) || 'unknown error'));
+  }finally{
+    btn.disabled = false; btn.textContent = label;
+  }
 });
 
 /* ---------- start-up ---------- */
