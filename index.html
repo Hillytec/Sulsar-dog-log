@@ -1223,6 +1223,10 @@ function screenSettings(){
       '<div><div style="font-weight:700;">My assessors</div><div style="font-size:13px;color:var(--neutral-dim);">Who can see and sign off your reports</div></div>'+icon('chev',18)+'</div></div>';
   }
 
+  body += '<div class="card"><div class="readonly-label" style="margin-bottom:6px;">About this app</div>'+
+    '<div style="font-size:14px;margin-bottom:10px;">Version <b>'+APP_VERSION+'</b></div>'+
+    '<button type="button" class="btn btn-secondary btn-slim" onclick="App.refreshApp()">Get the latest version</button>'+
+    '<div style="font-size:12px;color:var(--neutral-dim);margin-top:8px;line-height:1.4;">Use this if a new update has been published but you still see the old one. Your logs, dog profiles and photos are not touched.</div></div>';
   var isLight = document.documentElement.getAttribute('data-theme')==='light';
   body += '<div class="card"><div class="readonly-label" style="margin-bottom:8px;">Appearance</div>'+
     '<div class="seg" style="margin-bottom:0;"><button type="button" class="'+(isLight?'':'active')+'" onclick="App.setTheme(\'dark\')">Dark (night)</button><button type="button" class="'+(isLight?'active':'')+'" onclick="App.setTheme(\'light\')">Light (day)</button></div></div>';
@@ -1410,6 +1414,7 @@ function screenEdit(){
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
+var APP_VERSION = 'v20 - 17 Oct 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
@@ -2066,6 +2071,13 @@ window.App = {
     try{ localStorage.setItem('sdl_theme', next); }catch(e){}
     var m = document.querySelector('meta[name="theme-color"]'); if(m) m.setAttribute('content', next==='light' ? '#EEF1F6' : '#1B263B');
     var b = document.getElementById('themeBtn'); if(b) b.innerHTML = icon(next==='light'?'moon':'sun', 22);
+  },
+  refreshApp: async function(){
+    try{
+      if('serviceWorker' in navigator){ var regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(function(r){ return r.unregister(); })); }
+      if(window.caches){ var keys = await caches.keys(); await Promise.all(keys.map(function(k){ return caches.delete(k); })); }
+    }catch(e){}
+    location.reload();
   },
   arrangeMenus: function(){ state._arranging = true; render(); window.scrollTo(0,0); },
   doneArranging: function(){ state._arranging = false; render(); },
