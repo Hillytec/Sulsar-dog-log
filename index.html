@@ -1414,7 +1414,7 @@ function screenEdit(){
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
-var APP_VERSION = 'v20 - 17 Oct 2026';
+var APP_VERSION = 'v21 - 20 Oct 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
@@ -1747,10 +1747,80 @@ function skDrawStroke(ctx, st, k){
     var lx = ax - Math.cos(ang)*14*k, ly = ay - Math.sin(ang)*14*k;
     ctx.fillText(st.label, lx, ly);
   } else if(st.t==='stamp'){
-    var r=13*k;
-    ctx.fillStyle=st.c; ctx.beginPath(); ctx.arc(st.x*k,st.y*k,r,0,Math.PI*2); ctx.fill();
+    skDrawIcon(ctx, st.kind, st.x*k, st.y*k, k);
+  } else if(st.t==='line'){
+    skDrawLine(ctx, st, k);
+  } else if(st.t==='text'){
+    ctx.font='700 '+(16*k)+'px Inter, Arial, sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.lineWidth=4*k; ctx.strokeStyle='#ffffff'; ctx.strokeText(st.text, st.x*k, st.y*k);
+    ctx.fillStyle=st.c; ctx.fillText(st.text, st.x*k, st.y*k);
+  }
+}
+var SK_LABELS = {start:'Start', alert:'Alert', find:'Find', body:'Body', tree:'Tree', shrub:'Shrub', path:'Path', ditch:'Ditch', hedge:'Hedge'};
+function skDrawIcon(ctx, kind, x, y, k){
+  var r = 13*k;
+  function disc(col, lbl){
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='#fff'; ctx.font='800 '+(14*k)+'px Inter, Arial, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillText(st.label, st.x*k, st.y*k+k*0.5);
+    ctx.fillText(lbl, x, y+k*0.5);
+  }
+  if(kind==='start'){ disc('#2E9E4F','S'); }
+  else if(kind==='alert'){ disc('#D62828','A'); }
+  else if(kind==='find'){
+    ctx.fillStyle='#C2185B'; ctx.beginPath();
+    ctx.moveTo(x,y-r*1.25); ctx.lineTo(x+r*1.25,y); ctx.lineTo(x,y+r*1.25); ctx.lineTo(x-r*1.25,y); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='800 '+(14*k)+'px Inter, Arial, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('F', x, y+k*0.5);
+  } else if(kind==='body'){
+    ctx.fillStyle='#222222'; ctx.fillRect(x-r,y-r,r*2,r*2);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1.5*k; ctx.strokeRect(x-r+2*k,y-r+2*k,r*2-4*k,r*2-4*k);
+    ctx.fillStyle='#fff'; ctx.font='800 '+(14*k)+'px Inter, Arial, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('B', x, y+k*0.5);
+  } else if(kind==='tree'){
+    ctx.fillStyle='#7A4B1E'; ctx.fillRect(x-2.5*k, y+3*k, 5*k, 11*k);
+    ctx.fillStyle='#1B6B35'; ctx.beginPath(); ctx.arc(x, y-3*k, 11*k, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#2E9E4F'; ctx.beginPath(); ctx.arc(x-3*k, y-6*k, 4*k, 0, Math.PI*2); ctx.fill();
+  } else if(kind==='shrub'){
+    ctx.fillStyle='#4CAF50';
+    [[-6,2,6],[6,2,6],[0,-4,7]].forEach(function(c){ ctx.beginPath(); ctx.arc(x+c[0]*k, y+c[1]*k, c[2]*k, 0, Math.PI*2); ctx.fill(); });
+    ctx.strokeStyle='#1B6B35'; ctx.lineWidth=1.5*k;
+    [[-6,2,6],[6,2,6],[0,-4,7]].forEach(function(c){ ctx.beginPath(); ctx.arc(x+c[0]*k, y+c[1]*k, c[2]*k, 0, Math.PI*2); ctx.stroke(); });
+  }
+}
+function skResample(pts, step){
+  var out=[pts[0]], acc=0;
+  for(var i=1;i<pts.length;i++){
+    var dx=pts[i].x-pts[i-1].x, dy=pts[i].y-pts[i-1].y, d=Math.sqrt(dx*dx+dy*dy);
+    if(!d) continue;
+    var pos = step-acc;
+    while(pos<=d){ out.push({x:pts[i-1].x+dx*pos/d, y:pts[i-1].y+dy*pos/d}); pos+=step; }
+    acc = d-(pos-step);
+  }
+  return out;
+}
+function skDrawLine(ctx, st, k){
+  var P = st.pts.map(function(p){ return {x:p.x*k, y:p.y*k}; });
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  if(P.length<2) return;
+  if(st.kind==='path'){
+    ctx.strokeStyle='#8B5A2B'; ctx.lineWidth=4*k; ctx.setLineDash([10*k,7*k]);
+    ctx.beginPath(); ctx.moveTo(P[0].x,P[0].y); for(var i=1;i<P.length;i++) ctx.lineTo(P[i].x,P[i].y); ctx.stroke();
+    ctx.setLineDash([]);
+  } else if(st.kind==='ditch'){
+    var R = skResample(P, 7*k); if(R.length<2) return;
+    ctx.strokeStyle='#1E6FD9'; ctx.lineWidth=2.5*k;
+    ctx.beginPath();
+    for(var j=0;j<R.length;j++){
+      var a=R[Math.max(0,j-1)], b=R[Math.min(R.length-1,j+1)];
+      var ang=Math.atan2(b.y-a.y,b.x-a.x)+Math.PI/2, o=(j%2?1:-1)*5*k;
+      var px=R[j].x+Math.cos(ang)*o, py=R[j].y+Math.sin(ang)*o;
+      if(j===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.stroke();
+  } else if(st.kind==='hedge'){
+    var H = skResample(P, 7*k);
+    ctx.fillStyle='#1B6B35'; ctx.strokeStyle='#0F4A22'; ctx.lineWidth=1*k;
+    H.forEach(function(p){ ctx.beginPath(); ctx.arc(p.x,p.y,6*k,0,Math.PI*2); ctx.fill(); ctx.stroke(); });
   }
 }
 function skRedraw(preview){
@@ -1768,7 +1838,7 @@ function skUpdateUI(){
   Array.prototype.forEach.call(ov.querySelectorAll('[data-tool]'), function(b){ b.classList.toggle('on', b.getAttribute('data-tool')===sk.tool); });
   Array.prototype.forEach.call(ov.querySelectorAll('[data-w]'), function(b){ b.classList.toggle('on', +b.getAttribute('data-w')===sk.width); });
   var h = ov.querySelector('.sk-hint');
-  var hints = {pen:'Draw with your finger', erase:'Rub out', north:'Press and drag to point North', wind:'Press and drag the way the wind blows', start:'Tap to mark the start', alert:'Tap to mark a dog alert / find'};
+  var hints = {pen:'Draw with your finger', erase:'Rub out', north:'Press and drag to point North', wind:'Press and drag the way the wind blows', start:'Tap to mark the start', alert:'Tap to mark a dog alert', find:'Tap to mark a find', body:'Tap to mark a body', tree:'Tap to place a tree', shrub:'Tap to place a shrub', path:'Draw along the path', ditch:'Draw along the ditch', hedge:'Draw along the hedge', text:'Tap where the words should go'};
   if(h) h.textContent = hints[sk.tool]||'';
 }
 function openSketch(){
@@ -1788,6 +1858,15 @@ function openSketch(){
       '<button type="button" class="sk-btn" data-tool="wind">Wind</button>'+
       '<button type="button" class="sk-btn" data-tool="start">Start</button>'+
       '<button type="button" class="sk-btn" data-tool="alert">Alert</button></div>'+
+    '<div class="sk-bar sk-tools">'+
+      '<button type="button" class="sk-btn" data-tool="find">Find</button>'+
+      '<button type="button" class="sk-btn" data-tool="body">Body</button>'+
+      '<button type="button" class="sk-btn" data-tool="path">Path</button>'+
+      '<button type="button" class="sk-btn" data-tool="ditch">Ditch</button>'+
+      '<button type="button" class="sk-btn" data-tool="hedge">Hedge</button>'+
+      '<button type="button" class="sk-btn" data-tool="tree">Tree</button>'+
+      '<button type="button" class="sk-btn" data-tool="shrub">Shrub</button>'+
+      '<button type="button" class="sk-btn" data-tool="text">Text</button></div>'+
     '<div class="sk-stage"><canvas id="skCanvas"></canvas></div>'+
     '<div class="sk-bar sk-bot"><button type="button" class="sk-btn" data-act="undo">Undo</button><button type="button" class="sk-btn" data-act="clear">Clear</button><div class="sk-hint"></div></div>';
   document.body.appendChild(ov);
@@ -1811,8 +1890,15 @@ function openSketch(){
       skRedraw(sk.cur);
     } else if(t==='north' || t==='wind'){
       sk.cur = {t:'arrow', c: t==='north' ? '#111111' : '#1E6FD9', label: t==='north' ? 'N' : 'WIND', a:p, b:p};
-    } else if(t==='start' || t==='alert'){
-      sk.strokes.push({t:'stamp', c: t==='start' ? '#2E9E4F' : '#D62828', label: t==='start' ? 'S' : 'A', x:p.x, y:p.y});
+    } else if(t==='path' || t==='ditch' || t==='hedge'){
+      sk.cur = {t:'line', kind:t, pts:[p]};
+      skRedraw(sk.cur);
+    } else if(t==='text'){
+      var txt = prompt('Type your label (e.g. Hedge gap, Car park)', '');
+      if(txt && txt.trim()){ sk.strokes.push({t:'text', c:sk.colour, text:txt.trim().slice(0,40), x:p.x, y:p.y}); }
+      skRedraw();
+    } else if(SK_LABELS[t] && (t==='start'||t==='alert'||t==='find'||t==='body'||t==='tree'||t==='shrub')){
+      sk.strokes.push({t:'stamp', kind:t, x:p.x, y:p.y});
       skRedraw();
     }
   });
@@ -1830,6 +1916,7 @@ function openSketch(){
       var dx=cur.b.x-cur.a.x, dy=cur.b.y-cur.a.y;
       if(Math.sqrt(dx*dx+dy*dy) < 25){ skRedraw(); return; }
     }
+    if(cur.t==='line' && cur.pts.length<3){ skRedraw(); return; }
     sk.strokes.push(cur); skRedraw();
   }
   canvas.addEventListener('pointerup', up);
@@ -1852,11 +1939,47 @@ function openSketch(){
 }
 function exportSketchPNG(){
   var k = 1000/Math.max(sk.cw, sk.ch);
+  var used = [];
+  sk.strokes.forEach(function(st){
+    var kind = st.t==='stamp' ? st.kind : (st.t==='line' ? st.kind : null);
+    if(kind && used.indexOf(kind)<0) used.push(kind);
+  });
+  var W = Math.round(sk.cw*k), kk = k*0.7, rowH = Math.round(28*k), padX = 14*k;
+  var meas = document.createElement('canvas').getContext('2d');
+  meas.font='700 '+(12*k)+'px Inter, Arial, sans-serif';
+  var items = used.map(function(kind){
+    var isLine = (kind==='path'||kind==='ditch'||kind==='hedge');
+    var iw = isLine ? 38*kk : 36*kk;
+    return {kind:kind, isLine:isLine, iw:iw, w: iw + 4*k + meas.measureText(SK_LABELS[kind]).width + 14*k};
+  });
+  var rows = [[]], rx = padX;
+  items.forEach(function(it){
+    if(rx + it.w > W - padX && rows[rows.length-1].length){ rows.push([]); rx = padX; }
+    rows[rows.length-1].push(it); rx += it.w;
+  });
+  var legH = used.length ? rows.length*rowH + Math.round(6*k) : 0;
   var out = document.createElement('canvas');
-  out.width = Math.round(sk.cw*k); out.height = Math.round(sk.ch*k);
+  out.width = W; out.height = Math.round(sk.ch*k) + legH;
   var ctx = out.getContext('2d');
   ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,out.width,out.height);
   sk.strokes.forEach(function(st){ skDrawStroke(ctx, st, k); });
+  if(legH){
+    var ly = Math.round(sk.ch*k);
+    ctx.fillStyle='#f3f3f3'; ctx.fillRect(0,ly,out.width,legH);
+    ctx.strokeStyle='#cccccc'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,ly+0.5); ctx.lineTo(out.width,ly+0.5); ctx.stroke();
+    ctx.font='700 '+(12*k)+'px Inter, Arial, sans-serif'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    rows.forEach(function(row, ri){
+      var x = padX, cy = ly + Math.round(3*k) + ri*rowH + rowH/2;
+      row.forEach(function(it){
+        if(it.isLine){
+          var seg = {t:'line', kind:it.kind, pts:[{x:0,y:0},{x:10,y:0},{x:20,y:0},{x:30,y:0}]};
+          ctx.save(); ctx.translate(x, cy); skDrawLine(ctx, seg, kk); ctx.restore();
+        } else { skDrawIcon(ctx, it.kind, x+it.iw/2, cy, kk); }
+        ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillStyle='#222222'; ctx.fillText(SK_LABELS[it.kind], x+it.iw+4*k, cy);
+        x += it.w;
+      });
+    });
+  }
   return {dataUrl: out.toDataURL('image/png'), w: out.width, h: out.height};
 }
 async function saveSketch(){
