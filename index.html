@@ -168,6 +168,21 @@ details.section .section-body{padding:4px 16px 16px;}
 .sk-stage{flex:1;min-height:0;position:relative;background:#fff;}
 .sk-stage canvas{position:absolute;left:0;top:0;width:100%;height:100%;touch-action:none;display:block;}
 .sk-hint{font-size:12px;color:var(--neutral-dim);flex:1;text-align:right;}
+.lv-ov{position:fixed;left:0;top:0;right:0;bottom:0;height:100dvh;z-index:1000;background:var(--page-bg);display:flex;flex-direction:column;color:var(--neutral);font-family:'Inter',-apple-system,sans-serif;}
+.lv-map{flex:1;min-height:0;background:var(--secondary);position:relative;}
+.lv-stats{display:flex;gap:6px;padding:8px 10px;background:var(--secondary);flex:none;}
+.lv-stat{flex:1;text-align:center;}
+.lv-stat b{display:block;font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;}
+.lv-stat span{font-size:11px;color:var(--neutral-dim);text-transform:uppercase;letter-spacing:.05em;}
+.lv-warn{font-size:12px;padding:6px 12px;background:var(--secondary);color:var(--neutral-dim);flex:none;border-top:1px solid var(--line);line-height:1.35;}
+.lv-warn.bad{color:#fff;background:#B3261E;font-weight:700;}
+.lv-chip{font-size:12px;font-weight:700;padding:5px 9px;border-radius:999px;border:1.5px solid var(--neutral-dim);}
+.lv-bot{display:flex;gap:8px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:var(--secondary);flex:none;}
+.lv-bot .btn{margin:0;flex:1;min-height:46px;}
+.me-dot{width:18px;height:18px;border-radius:50%;background:#1E6FD9;border:3px solid #fff;box-shadow:0 0 0 2px #1E6FD9,0 0 0 8px rgba(30,111,217,.25);}
+.al-pin{width:22px;height:22px;border-radius:50%;background:#D62828;color:#fff;font:800 12px Inter,Arial,sans-serif;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+.trk-pill{white-space:nowrap;position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + env(safe-area-inset-bottom));z-index:900;background:#B3261E;color:#fff;font:700 13px Inter,Arial,sans-serif;padding:10px 16px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.4);border:0;cursor:pointer;}
+#trackMapView,#trackMapEdit{width:100%;height:240px;border-radius:12px;margin-top:8px;background:var(--secondary);}
 .st-ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:1100;background:rgba(10,15,28,.86);display:flex;align-items:flex-end;justify-content:center;}
 .st-card{width:100%;max-width:480px;max-height:94dvh;overflow-y:auto;background:var(--secondary);border-radius:20px 20px 0 0;padding:20px 18px calc(18px + env(safe-area-inset-bottom));color:var(--neutral);font-family:'Inter',-apple-system,sans-serif;}
 .st-h{font-size:20px;font-weight:800;margin:0 0 4px;}
@@ -763,6 +778,24 @@ async function downloadLogPDF(log){
         flushTitle(imgH+10);
         doc.addImage(imgData,'JPEG',margin,y,imgW,imgH);
         y += imgH+16;
+      }catch(e){}
+    }
+  }
+
+  if(trkCount(log.track)>1){
+    var rEl = document.getElementById('trackMapView');
+    sectionTitle('Search route (live GPS)');
+    var rc = null, rW = pageW-margin*2, rH = 0;
+    if(rEl){ try{ rc = await html2canvas(rEl, {useCORS:true, backgroundColor:'#E8E8E8'}); rH = rW*(rc.height/rc.width); }catch(e){ rc = null; } }
+    flushTitle(rc ? rH+60 : 40);
+    field('Route recorded', trkSummary(log).replace(/&middot;/g,'-'));
+    if(rc){
+      try{
+        doc.addImage(rc.toDataURL('image/jpeg',0.72),'JPEG',margin,y,rW,rH);
+        y += rH+10;
+        doc.setFont('helvetica','normal'); doc.setFontSize(8.5); doc.setTextColor(110,110,110);
+        doc.text('Orange = handler route (GPS)   Blue dashed = dog track (GPX)   Red numbers = dog alerts (in order)', margin, y);
+        y += 16;
       }catch(e){}
     }
   }
@@ -1414,7 +1447,7 @@ function screenEdit(){
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
-var APP_VERSION = 'v21 - 20 Oct 2026';
+var APP_VERSION = 'v22 - 20 Oct 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
@@ -1476,6 +1509,10 @@ function screenView(){
   body += sketchViewCard(d) + readinessViewCard(d) + timingViewCard(d) + groundViewCard(d);
   if(d.gpx){
     body += '<div class="card"><div class="readonly-label">GPX track &mdash; '+esc(d.gpx.name)+'</div><div id="gpxMapView"></div></div>';
+  }
+  if(trkCount(d.track)>1){
+    body += '<div class="card"><div class="readonly-label">Search route (live GPS)</div><div style="font-size:13px;margin-top:4px;">'+trkSummary(d)+'</div><div id="trackMapView"></div>'+
+      '<div style="font-size:11px;color:var(--neutral-dim);margin-top:6px;">Orange = your route &middot; Blue dashed = dog track (GPX) &middot; Red numbers = dog alerts</div></div>';
   }
   if(d.status!=='draft'){ body += commentsSection(d); }
   body += roField('Trainer comments', d.trainerComments);
@@ -1545,6 +1582,7 @@ function render(){
     setTimeout(function(){ var el=document.getElementById('pinInput'); if(el) el.focus(); },30);
     return;
   }
+  if(trk && (state.screen!=='edit' || state.draft!==trk.draft)){ trkStop(true); closeLive(); }
   var html = header();
   if(state.screen==='home') html += '<div class="main">'+screenHome()+'</div>';
   else if(state.screen==='trainer') html += '<div class="main">'+screenTrainerQueue()+'</div>';
@@ -1559,6 +1597,8 @@ function render(){
   if(state.screen==='edit' && state.draft && state.draft.gpx) setTimeout(function(){renderMap('gpxMap', state.draft.gpx);},30);
   if(state.screen==='view' && state.draft && state.draft.gpx) setTimeout(function(){renderMap('gpxMapView', state.draft.gpx);},30);
   if(state.screen==='view') setTimeout(setupSignaturePad,30);
+  if(state.screen==='view' && state.draft && trkCount(state.draft.track)>1) setTimeout(function(){renderRouteMap('trackMapView', state.draft);},60);
+  if(trk) trkPill();
 }
 
 function loginScreenHTML(){
@@ -2040,7 +2080,9 @@ function timerSection(d){
     return '<div class="al-row"><div><b>'+fmtClock(a.at)+(t.start?' (+'+fmtElapsed(a.at-t.start)+')':'')+'</b> '+esc(a.note||'Alert')+'</div><button onclick="App.removeAlert(\''+a.id+'\')">'+icon('x',14)+'</button></div>';
   }).join('');
   return section('<span>Search timer &amp; alerts'+(running?'<b class="rd-count">running</b>':'')+'</span>', false, [
-    '<div class="tm-big" id="tmrElapsed">'+el+'</div><div class="tm-sub">'+sub+'</div>'+btn,
+    '<div class="tm-big" id="tmrElapsed">'+el+'</div><div class="tm-sub">'+sub+'</div>'+btn+
+    '<button type="button" class="btn btn-secondary btn-slim" style="margin-top:10px;" onclick="App.openLive()">'+icon('map',16)+' &nbsp;Live map &amp; route tracking</button>'+
+    '<div class="tm-sub" id="trkSum" style="margin-top:6px;">'+(trkSummary(d) ? 'Route: '+trkSummary(d) : '')+'</div>',
     '<label style="margin-top:16px;">Dog alerts / finds</label>'+
     '<input type="text" placeholder="What did the dog do? (optional)" value="'+esc(state._alertNote||'')+'" oninput="App.setAlertNote(this.value)">'+
     '<button type="button" class="btn btn-secondary btn-slim" onclick="App.logAlert()">+ Log alert now</button>'+
@@ -2112,6 +2154,242 @@ function showStrategy(auto){
   }
   document.getElementById('stClose').addEventListener('click', close);
   ov.addEventListener('click', function(e){ if(e.target===ov) close(); });
+}
+
+/* ---------- live route tracking ---------- */
+var trk = null;       /* the active recording (only one at a time) */
+var lv = null;        /* the live map overlay, if open */
+function trkHav(a,b,c,d){
+  var R=6371000, p1=a*Math.PI/180, p2=c*Math.PI/180, dp=(c-a)*Math.PI/180, dl=(d-b)*Math.PI/180;
+  var x=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)*Math.sin(dl/2);
+  return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function trkSegs(tr){ return (tr && tr.segs) ? tr.segs.filter(function(g){return g.length;}) : []; }
+function trkCount(tr){ return trkSegs(tr).reduce(function(n,g){return n+g.length;},0); }
+function trkDist(tr){
+  var m=0; trkSegs(tr).forEach(function(g){ for(var i=1;i<g.length;i++) m+=trkHav(g[i-1][0],g[i-1][1],g[i][0],g[i][1]); });
+  return m;
+}
+function fmtDist(m){ return m<1000 ? Math.round(m)+' m' : (m/1000).toFixed(2)+' km'; }
+function trkSummary(d){
+  var tr=d.track; if(!tr || !trkCount(tr)) return '';
+  return fmtDist(trkDist(tr))+' &middot; '+trkCount(tr)+' points'+(trkSegs(tr).length>1?' &middot; '+trkSegs(tr).length+' parts (gaps where the phone paused)':'');
+}
+function trkOnFix(pos){
+  if(!trk) return;
+  var c=pos.coords, now=Date.now(), tr=trk.draft.track;
+  trk.pos={lat:c.latitude, lon:c.longitude, acc:c.accuracy};
+  if(trk.lastFixAt && now-trk.lastFixAt>45000) trk.breakNext = true;
+  trk.lastFixAt = now;
+  if(c.accuracy<=40){
+    var seg = tr.segs[tr.segs.length-1];
+    if(trk.breakNext || !seg){ seg=[]; tr.segs.push(seg); trk.breakNext=false; }
+    var last = seg[seg.length-1];
+    var minMove = Math.max(3, Math.min(c.accuracy*0.5, 10));
+    if(!last || trkHav(last[0],last[1],c.latitude,c.longitude)>=minMove){
+      seg.push([+c.latitude.toFixed(6), +c.longitude.toFixed(6), now, Math.round(c.accuracy)]);
+      trk.dirty = true;
+    }
+  }
+  trkUpdateUI();
+}
+function trkOnErr(err){
+  if(!trk) return;
+  if(err && err.code===1){
+    var d = trk.draft; trkStop(true);
+    alert('The app is not allowed to use your location.\n\nOn iPhone: Settings > Privacy & Security > Location Services > turn on, then find Safari Websites (or this app) and choose "While Using the App". Then try again.');
+    trkUpdateUI();
+  } else {
+    trk.lastErr = Date.now(); trkUpdateUI();
+  }
+}
+async function trkWake(){
+  if(!trk) return;
+  try{
+    if('wakeLock' in navigator){
+      trk.wake = await navigator.wakeLock.request('screen'); trk.wakeOk = true;
+      trk.wake.addEventListener('release', function(){ if(trk){ trk.wakeOk=false; trkUpdateUI(); } });
+    }
+  }catch(e){ if(trk) trk.wakeOk = false; }
+  trkUpdateUI();
+}
+document.addEventListener('visibilitychange', function(){
+  if(!trk) return;
+  if(document.hidden){ trk.breakNext = true; trk.hiddenAt = Date.now(); }
+  else { if(trk.hiddenAt && Date.now()-trk.hiddenAt>20000) trk.gapNote = 'Tracking paused for '+fmtElapsed(Date.now()-trk.hiddenAt)+' while the app was hidden.'; trk.hiddenAt=null; trkWake(); trkUpdateUI(); }
+});
+function trkStart(d){
+  if(!navigator.geolocation){ alert('This phone or browser cannot share its location with the app.'); return; }
+  if(trk) return;
+  d.track = d.track || {segs:[]};
+  d.track.active = true; d.track.endedAt = null; d.track.startedAt = d.track.startedAt || Date.now();
+  trk = {draft:d, watchId:null, pos:null, lastFixAt:null, breakNext:d.track.segs.length>0, dirty:true, wakeOk:false, gapNote:''};
+  trk.watchId = navigator.geolocation.watchPosition(trkOnFix, trkOnErr, {enableHighAccuracy:true, maximumAge:0, timeout:20000});
+  trk.saveTimer = setInterval(function(){ if(trk && trk.dirty){ trk.dirty=false; try{ dbPut(STORE, trk.draft); }catch(e){} } }, 15000);
+  trkWake(); trkPill();
+}
+function trkStop(silent){
+  if(!trk) return;
+  var d = trk.draft;
+  try{ navigator.geolocation.clearWatch(trk.watchId); }catch(e){}
+  clearInterval(trk.saveTimer);
+  try{ if(trk.wake) trk.wake.release(); }catch(e){}
+  d.track.active = false; d.track.endedAt = Date.now();
+  var pill = document.getElementById('trkPill'); if(pill) pill.parentNode.removeChild(pill);
+  trk = null;
+  try{ dbPut(STORE, d); }catch(e){}
+}
+function trkPill(){
+  var pill = document.getElementById('trkPill');
+  if(!trk){ if(pill) pill.parentNode.removeChild(pill); return; }
+  if(!pill){
+    pill = document.createElement('button'); pill.id='trkPill'; pill.type='button'; pill.className='trk-pill';
+    pill.addEventListener('click', function(){ openLive(); });
+    document.body.appendChild(pill);
+  }
+  pill.style.display = lv ? 'none' : '';
+  pill.textContent = '● Tracking '+fmtDist(trkDist(trk.draft.track))+' – tap for map';
+}
+function routeLayers(map, d, group){
+  var bounds = [];
+  var dog = d.gpx && d.gpx.points && d.gpx.points.length>1 ? d.gpx.points : null;
+  if(dog){ L.polyline(dog,{color:'#1E6FD9',weight:3,opacity:.85,dashArray:'6 6'}).addTo(group); dog.forEach(function(p){bounds.push(p);}); }
+  var segs = trkSegs(d.track);
+  segs.forEach(function(g){
+    var ll = g.map(function(p){return [p[0],p[1]];});
+    if(ll.length>1) L.polyline(ll,{color:'#FF6B00',weight:5,opacity:.95}).addTo(group);
+    else L.circleMarker(ll[0],{radius:4,color:'#FF6B00'}).addTo(group);
+    ll.forEach(function(p){bounds.push(p);});
+  });
+  /* dotted link across gaps */
+  for(var i=1;i<segs.length;i++){
+    var a=segs[i-1][segs[i-1].length-1], b=segs[i][0];
+    L.polyline([[a[0],a[1]],[b[0],b[1]]],{color:'#FF6B00',weight:2,dashArray:'2 6',opacity:.8}).addTo(group);
+  }
+  if(segs.length){
+    var f=segs[0][0], l=segs[segs.length-1][segs[segs.length-1].length-1];
+    L.circleMarker([f[0],f[1]],{radius:7,color:'#FFD60A',fillColor:'#FFD60A',fillOpacity:1,weight:2}).addTo(group);
+    L.circleMarker([l[0],l[1]],{radius:7,color:'#1B263B',fillColor:'#E0E1DD',fillOpacity:1,weight:2}).addTo(group);
+  }
+  (d.alerts||[]).forEach(function(a,i){
+    if(!a.pos) return;
+    L.marker(a.pos,{icon:L.divIcon({className:'',html:'<div class="al-pin">'+(i+1)+'</div>',iconSize:[22,22],iconAnchor:[11,11]})}).addTo(group);
+    bounds.push(a.pos);
+  });
+  return bounds;
+}
+var routeMapInstance = null;
+function renderRouteMap(elId, d){
+  var el = document.getElementById(elId); if(!el) return;
+  if(routeMapInstance){ routeMapInstance.remove(); routeMapInstance=null; }
+  var map = L.map(el,{zoomControl:false, attributionControl:false, preferCanvas:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19, crossOrigin:true}).addTo(map);
+  var g = L.layerGroup().addTo(map);
+  var b = routeLayers(map, d, g);
+  if(b.length) map.fitBounds(L.latLngBounds(b),{padding:[22,22],maxZoom:19}); else map.setView([52.2,1.0],7);
+  routeMapInstance = map;
+}
+function closeLive(){
+  var ov = document.getElementById('liveOv'); if(ov) ov.parentNode.removeChild(ov);
+  if(lv && lv.map){ try{ lv.map.remove(); }catch(e){} }
+  lv = null; document.body.style.overflow='';
+  if(trk) trkPill();
+}
+function lvDraw(){
+  if(!lv) return;
+  var d = lv.draft;
+  lv.group.clearLayers();
+  var b = routeLayers(lv.map, d, lv.group);
+  if(trk && trk.pos){
+    var ll=[trk.pos.lat, trk.pos.lon];
+    L.circle(ll,{radius:Math.max(trk.pos.acc,3),color:'#1E6FD9',weight:1,fillOpacity:.08}).addTo(lv.group);
+    L.marker(ll,{icon:L.divIcon({className:'',html:'<div class="me-dot"></div>',iconSize:[18,18],iconAnchor:[9,9]}),interactive:false}).addTo(lv.group);
+    if(lv.follow) lv.map.setView(ll, Math.max(lv.map.getZoom(), 17), {animate:false});
+  } else if(!lv.fitted && b.length){
+    lv.map.fitBounds(L.latLngBounds(b),{padding:[30,30],maxZoom:19}); lv.fitted = true;
+  }
+}
+function trkUpdateUI(){
+  if(trk){ trkPill(); var ts=document.getElementById('trkSum'); if(ts && trkCount(trk.draft.track)) ts.innerHTML='Route: '+trkSummary(trk.draft); }
+  if(!lv) return;
+  var ov = document.getElementById('liveOv'); if(!ov) return;
+  var d = lv.draft, t = d.timing || {};
+  function set(id,v){ var e=document.getElementById(id); if(e) e.textContent=v; }
+  set('lvDist', fmtDist(trkDist(d.track)));
+  set('lvTime', t.start ? fmtElapsed((t.end||Date.now())-t.start) : '--:--');
+  set('lvPts', String(trkCount(d.track)));
+  var chip = document.getElementById('lvChip');
+  if(chip){
+    if(trk && trk.pos){ chip.textContent = 'GPS ±'+Math.round(trk.pos.acc)+' m'; }
+    else if(trk){ chip.textContent = 'Finding GPS...'; }
+    else chip.textContent = 'Not recording';
+  }
+  var w = document.getElementById('lvWarn');
+  if(w){
+    var msg = '', bad = false;
+    if(trk){
+      if(!trk.wakeOk){ msg = 'Keep this app open with the screen on. If the screen locks, recording pauses. (Screen-awake is not available here.)'; bad = true; }
+      else msg = 'Screen is being kept awake. Do not switch to another app while recording.';
+      if(trk.gapNote){ msg = trk.gapNote+' '+msg; bad = true; }
+      if(trk.lastErr && (!trk.lastFixAt || trk.lastErr>trk.lastFixAt) && Date.now()-trk.lastErr<30000){ msg = 'GPS signal lost for a moment. Keep walking in the open if you can. '+msg; bad = true; }
+      if(trk.pos && trk.pos.acc>40){ msg = 'Weak GPS signal (±'+Math.round(trk.pos.acc)+' m). Points are not being recorded until it improves.'; bad = true; }
+    } else if(d.track && d.track.active){ msg = 'Recording was interrupted (the app was closed or restarted). Tap Resume to carry on.'; bad = true; }
+    else msg = trkCount(d.track) ? 'Route recorded. Tap Start to add more.' : 'Tap Start when you begin your search. Your route is drawn as you walk.';
+    w.textContent = msg; w.classList.toggle('bad', bad);
+  }
+  var sb = document.getElementById('lvStart');
+  if(sb){
+    if(trk){ sb.textContent='Stop search'; sb.className='btn btn-danger'; }
+    else { sb.textContent = (d.track && d.track.active) ? 'Resume' : (trkCount(d.track) ? 'Start again' : 'Start search'); sb.className='btn btn-primary'; }
+  }
+  var fb = document.getElementById('lvFollow'); if(fb) fb.classList.toggle('on', !!lv.follow);
+  lvDraw();
+}
+function openLive(){
+  var d = state.draft; if(!d) return;
+  if(trk && trk.draft!==d) return;
+  closeLive();
+  d.alerts = d.alerts||[];
+  var ov = document.createElement('div'); ov.id='liveOv'; ov.className='lv-ov';
+  ov.innerHTML =
+    '<div class="sk-bar sk-top"><button type="button" class="sk-btn" data-lv="close">Close</button><div class="sk-title">Live map</div><div class="lv-chip" id="lvChip"></div></div>'+
+    '<div class="lv-map" id="lvMap"></div>'+
+    '<div class="lv-stats"><div class="lv-stat"><b id="lvDist">0 m</b><span>Distance</span></div><div class="lv-stat"><b id="lvTime">--:--</b><span>Time</span></div><div class="lv-stat"><b id="lvPts">0</b><span>Points</span></div></div>'+
+    '<div class="lv-warn" id="lvWarn"></div>'+
+    '<div class="lv-bot"><button type="button" class="btn btn-primary" id="lvStart" data-lv="start">Start search</button>'+
+      '<button type="button" class="btn btn-secondary" data-lv="alert">Alert here</button>'+
+      '<button type="button" class="sk-btn" id="lvFollow" data-lv="follow" style="flex:none;">Follow me</button></div>';
+  document.body.appendChild(ov); document.body.style.overflow='hidden';
+  var map = L.map(document.getElementById('lvMap'),{zoomControl:false, attributionControl:false, preferCanvas:true});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  map.setView([52.2,1.0],7);
+  lv = {draft:d, map:map, group:L.layerGroup().addTo(map), follow:!!trk, fitted:false};
+  map.on('dragstart', function(){ if(lv){ lv.follow=false; var fb=document.getElementById('lvFollow'); if(fb) fb.classList.remove('on'); } });
+  setTimeout(function(){ if(lv){ map.invalidateSize(); trkUpdateUI(); } }, 60);
+  ov.addEventListener('click', function(e){
+    var b = e.target.closest ? e.target.closest('button') : null; if(!b || !lv) return;
+    var a = b.getAttribute('data-lv');
+    if(a==='close'){ closeLive(); }
+    else if(a==='follow'){ lv.follow = !lv.follow; if(lv.follow && trk && trk.pos) lv.map.setView([trk.pos.lat,trk.pos.lon], Math.max(lv.map.getZoom(),17)); trkUpdateUI(); }
+    else if(a==='start'){
+      if(trk){ App.stopSearch(); }
+      else {
+        var t = d.timing;
+        if(!t || !t.start){ d.timing = {start:Date.now(), end:null}; }
+        else if(t.end){ /* keep original timing; just add more route */ }
+        trkStart(d); lv.follow = true; render(); trkUpdateUI();
+      }
+    }
+    else if(a==='alert'){
+      var note = prompt('What did the dog do? (optional)', '');
+      if(note===null) return;
+      var pos = (trk && trk.pos) ? [+trk.pos.lat.toFixed(6), +trk.pos.lon.toFixed(6)] : null;
+      d.alerts.push({id:uid('al'), at:Date.now(), note:(note||'').trim(), pos:pos});
+      try{ dbPut(STORE, d); }catch(e){}
+      render(); trkUpdateUI();
+      if(!pos) alert('Alert logged, but there is no GPS position yet, so it will not show on the map.');
+    }
+  });
 }
 
 /* ---------- App controller ---------- */
@@ -2227,18 +2505,20 @@ window.App = {
     var row = el.closest('.rd-row'); if(row) row.classList.toggle('on', el.checked);
     var c = document.getElementById('gdCount'); if(c) c.textContent = groundCount(state.draft)+'/'+GROUND_ITEMS.length;
   },
+  openLive: function(){ openLive(); },
   startSearch: async function(){ state.draft.timing = {start:Date.now(), end:null}; state._open=state._open||{}; state._open.timer=true; render(); try{ await dbPut(STORE, state.draft); }catch(e){} },
   stopSearch: async function(){
     var t = state.draft.timing; if(!t || !t.start || t.end) return;
     t.end = Date.now();
+    if(trk) trkStop(true);
     if(!state.draft.timeOnTrail) state.draft.timeOnTrail = fmtElapsed(t.end - t.start);
-    render(); try{ await dbPut(STORE, state.draft); }catch(e){}
+    render(); trkUpdateUI(); try{ await dbPut(STORE, state.draft); }catch(e){}
   },
   resetSearch: function(){ if(!confirm('Reset the timer? Start and finish times will be cleared.')) return; state.draft.timing = null; render(); },
   setAlertNote: function(v){ state._alertNote = v; },
   logAlert: async function(){
     state.draft.alerts = state.draft.alerts||[];
-    state.draft.alerts.push({id:uid('al'), at:Date.now(), note:(state._alertNote||'').trim()});
+    state.draft.alerts.push({id:uid('al'), at:Date.now(), note:(state._alertNote||'').trim(), pos:(trk&&trk.pos&&trk.draft===state.draft)?[+trk.pos.lat.toFixed(6),+trk.pos.lon.toFixed(6)]:null});
     state._alertNote=''; state._open=state._open||{}; state._open.timer=true; render();
     try{ await dbPut(STORE, state.draft); }catch(e){}
   },
