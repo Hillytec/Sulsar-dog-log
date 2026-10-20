@@ -210,6 +210,9 @@ details.section .section-body{padding:4px 16px 16px;}
 .ar-row:last-of-type{border-bottom:none;}
 .ar-btn{width:44px;height:40px;margin-left:6px;border:1.5px solid var(--neutral-dim);background:transparent;color:var(--neutral);border-radius:10px;font-size:15px;cursor:pointer;}
 .ar-btn:disabled{opacity:.25;cursor:default;}
+.ar-fld{display:flex;align-items:center;gap:5px;margin:0;padding:6px 9px;border:1.5px solid var(--neutral-dim);border-radius:10px;font-size:12px;font-weight:700;color:var(--neutral-dim);cursor:pointer;flex:none;}
+.ar-fld.on{border-color:var(--tertiary);color:var(--tertiary);}
+.ar-fld input{width:18px;height:18px;margin:0;}
 .ar-btn:active{background:var(--secondary-lighter);}
 </style>
 </head>
@@ -1438,16 +1441,23 @@ function screenEdit(){
     '<label>Any other comments / notes</label>'+micRow('anyOtherComments', d.anyOtherComments, 'Any final notes for the record...', null)
   ]);
 
-  body += state._arranging ? arrangePanel() : ('<button type="button" class="btn btn-secondary btn-slim" style="margin-bottom:12px;" onclick="App.arrangeMenus()">'+icon('list',16)+' &nbsp;Arrange menus</button>' + orderedSections(secs));
+  var fieldView = isFieldView();
+  body += state._arranging ? arrangePanel() : (viewBar() + '<button type="button" class="btn btn-secondary btn-slim" style="margin-bottom:12px;" onclick="App.arrangeMenus()">'+icon('list',16)+' &nbsp;Arrange menus</button>' + orderedSections(secs));
 
-  body += '<div class="btn-row" style="margin-top:6px;">'+
-    '<button class="btn btn-secondary" onclick="App.saveDraft()">Save draft</button>'+
-    '<button class="btn btn-primary" onclick="App.submitForReview()">Submit for review</button></div>';
-  body += '<button class="btn btn-danger" style="margin-top:10px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
+  if(fieldView && !state._arranging){
+    body += '<div class="btn-row" style="margin-top:6px;"><button class="btn btn-secondary" onclick="App.saveDraft()">Save draft</button>'+
+      '<button class="btn btn-primary" onclick="App.setViewMode(\'full\')">Finish in full log</button></div>'+
+      '<div style="font-size:12px;color:var(--neutral-dim);text-align:center;margin-top:8px;line-height:1.4;">Field view hides the other menus. Switch to the full log to complete the checklists and debrief, then submit.</div>';
+  } else {
+    body += '<div class="btn-row" style="margin-top:6px;">'+
+      '<button class="btn btn-secondary" onclick="App.saveDraft()">Save draft</button>'+
+      '<button class="btn btn-primary" onclick="App.submitForReview()">Submit for review</button></div>';
+    body += '<button class="btn btn-danger" style="margin-top:10px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
+  }
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
-var APP_VERSION = 'v22 - 20 Oct 2026';
+var APP_VERSION = 'v23 - 20 Oct 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
@@ -1457,17 +1467,35 @@ function menuOrder(){
   MENU_DEFAULT.forEach(function(k){ if(out.indexOf(k)<0) out.push(k); }); /* any menu added in future shows up at the end */
   return out;
 }
-function orderedSections(secs){ return menuOrder().map(function(k){ return secs[k]||''; }).join(''); }
+var FIELD_DEFAULT = ['weather','sketch','timer'];
+function fieldMenus(){
+  var saved = state.settings && state.settings.fieldMenus;
+  var out = (saved && saved.length) ? saved.filter(function(k){ return MENU_DEFAULT.indexOf(k)>=0; }) : [];
+  return out.length ? out : FIELD_DEFAULT.slice();
+}
+function isFieldView(){ return !!(state.settings && state.settings.viewMode==='field'); }
+function orderedSections(secs){
+  var field = isFieldView(), fm = fieldMenus();
+  return menuOrder().filter(function(k){ return !field || fm.indexOf(k)>=0; }).map(function(k){ return secs[k]||''; }).join('');
+}
+function viewBar(){
+  var f = isFieldView(), n = fieldMenus().length;
+  return '<div class="seg" style="margin-bottom:10px;">'+
+    '<button type="button" class="'+(f?'':'active')+'" onclick="App.setViewMode(\'full\')">Full log</button>'+
+    '<button type="button" class="'+(f?'active':'')+'" onclick="App.setViewMode(\'field\')">Field view</button></div>'+
+    (f ? '<div class="notice" style="margin-bottom:12px;">Field view: showing '+n+' of '+MENU_DEFAULT.length+' menus. Nothing is deleted &mdash; the rest are just tucked away. <b onclick="App.setViewMode(\'full\')" style="text-decoration:underline;cursor:pointer;">Show everything</b></div>' : '');
+}
 function arrangePanel(){
   var order = menuOrder();
   return '<div class="card"><div class="readonly-label" style="margin-bottom:6px;">Arrange menus</div>'+
-    '<div style="font-size:13px;color:var(--neutral-dim);margin-bottom:10px;line-height:1.4;">Tap the arrows to move a menu up or down. Your order is remembered on this phone.</div>'+
+    '<div style="font-size:13px;color:var(--neutral-dim);margin-bottom:10px;line-height:1.4;">Tap the arrows to move a menu up or down. Tick <b>Field</b> for the menus you want to see in Field view. Your choices are remembered on this phone.</div>'+
     order.map(function(k,i){
-      return '<div class="ar-row"><span>'+MENU_NAMES[k]+'</span><span>'+
+      var inField = fieldMenus().indexOf(k)>=0;
+      return '<div class="ar-row"><span style="display:flex;align-items:center;gap:10px;min-width:0;"><label class="ar-fld'+(inField?' on':'')+'"><input type="checkbox" '+(inField?'checked ':'')+'onchange="App.toggleFieldMenu(\''+k+'\',this.checked)"><span>Field</span></label><span>'+MENU_NAMES[k]+'</span></span><span style="flex:none;">'+
         '<button type="button" class="ar-btn" '+(i===0?'disabled ':'')+'onclick="App.moveMenu(\''+k+'\',-1)" aria-label="Move up">&#9650;</button>'+
         '<button type="button" class="ar-btn" '+(i===order.length-1?'disabled ':'')+'onclick="App.moveMenu(\''+k+'\',1)" aria-label="Move down">&#9660;</button></span></div>';
     }).join('')+
-    '<div class="btn-row" style="margin-top:12px;"><button type="button" class="btn btn-secondary btn-slim" onclick="App.resetMenuOrder()">Reset order</button>'+
+    '<div class="btn-row" style="margin-top:12px;"><button type="button" class="btn btn-secondary btn-slim" onclick="App.resetMenuOrder()">Reset all</button>'+
     '<button type="button" class="btn btn-primary btn-slim" onclick="App.doneArranging()">Done</button></div></div>';
 }
 function section(title, open, parts, key){
@@ -2490,7 +2518,21 @@ window.App = {
     try{ await saveSettings(); }catch(e){}
     render();
   },
-  resetMenuOrder: async function(){ state.settings.menuOrder = null; try{ await saveSettings(); }catch(e){} render(); },
+  resetMenuOrder: async function(){ state.settings.menuOrder = null; state.settings.fieldMenus = null; try{ await saveSettings(); }catch(e){} render(); },
+  setViewMode: async function(mode){
+    state.settings.viewMode = (mode==='field') ? 'field' : 'full';
+    state._arranging = false;
+    try{ await saveSettings(); }catch(e){}
+    render(); window.scrollTo(0,0);
+  },
+  toggleFieldMenu: async function(key, on){
+    var cur = fieldMenus().slice(), i = cur.indexOf(key);
+    if(on && i<0) cur.push(key);
+    if(!on && i>=0){ if(cur.length<=1){ alert('Field view needs at least one menu.'); render(); return; } cur.splice(i,1); }
+    state.settings.fieldMenus = cur;
+    try{ await saveSettings(); }catch(e){}
+    render();
+  },
   secToggle: function(key, isOpen){ state._open = state._open||{}; state._open[key] = !!isOpen; },
   toggleReady: function(key, el){
     state.draft.readiness = state.draft.readiness||{};
