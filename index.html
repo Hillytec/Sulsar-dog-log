@@ -99,6 +99,14 @@ details.section .section-body{padding:4px 16px 16px;}
 .bottom-nav button{flex:1;background:none;border:none;color:var(--neutral-dim);font-family:inherit;display:flex;
   flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:600;padding:6px 0;cursor:pointer;}
 .bottom-nav button.active{color:var(--primary);}
+.bottom-nav button{position:relative;}
+.nav-dot{position:absolute;top:4px;left:calc(50% + 8px);min-width:18px;height:18px;border-radius:9px;background:#D62828;color:#fff;font:800 11px Inter,Arial,sans-serif;display:flex;align-items:center;justify-content:center;padding:0 4px;}
+.att-card{border-left:4px solid #D62828;}
+.att-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line);cursor:pointer;}
+.att-row:first-of-type{border-top:none;}
+.att-row .t{flex:1;min-width:0;font-size:14px;font-weight:600;}
+.att-row .t span{display:block;font-size:12px;color:var(--neutral-dim);font-weight:500;}
+.badge.new{background:#D62828;color:#fff;}
 .log-card{background:var(--secondary-light);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px;
   display:flex;justify-content:space-between;align-items:center;cursor:pointer;}
 .log-card:active{border-color:var(--primary);}
@@ -620,7 +628,7 @@ function importLogFile(file){
   reader.readAsText(file);
 }
 
-async function downloadLogPDF(log){
+async function downloadLogPDF(log, mode){
   if(!window.jspdf){ alert('The PDF tool has not finished loading. Check your connection and try again in a moment.'); return; }
   var jsPDF = window.jspdf.jsPDF;
   var doc = new jsPDF({unit:'pt', format:'a4'});
@@ -837,8 +845,38 @@ async function downloadLogPDF(log){
     }
   }
 
+  if(log.signoffHistory && log.signoffHistory.length){
+    sectionTitle('Sign-off history');
+    flushTitle(40);
+    doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(90,90,90);
+    log.signoffHistory.forEach(function(h){
+      var txt = 'Signed by '+h.name+' ('+new Date(h.date).toLocaleDateString('en-GB')+'), reopened by '+h.reopenedBy+' on '+new Date(h.reopenedAt).toLocaleDateString('en-GB')+(h.reason?': '+h.reason:'.');
+      var ls = doc.splitTextToSize(txt, pageW-margin*2);
+      ensureSpace(ls.length*12+6); doc.text(ls, margin, y); y += ls.length*12+6;
+    });
+  }
+
   var fname = 'search-dog-log-'+log.date+'-'+(log.location||'log').replace(/[^a-z0-9]+/gi,'-').toLowerCase()+'.pdf';
+  if(mode==='share'){ showPdfReady(doc.output('blob'), fname); return; }
   doc.save(fname);
+}
+function closePdfReady(){ var o=document.getElementById('pdfReady'); if(o) o.parentNode.removeChild(o); }
+function showPdfReady(blob, fname){
+  closePdfReady();
+  var canShare = false, file = null;
+  try{ file = new File([blob], fname, {type:'application/pdf'}); canShare = !!(navigator.canShare && navigator.canShare({files:[file]})); }catch(e){}
+  var ov = document.createElement('div'); ov.id='pdfReady'; ov.className='st-ov';
+  ov.innerHTML = '<div class="st-card"><div class="st-h">Your PDF is ready</div>'+
+    '<div class="st-sub">'+(canShare ? 'Tap Share to send it by email, WhatsApp, Messages or save it to Files.' : 'Sharing from here is not available on this device, so use Save instead.')+'</div>'+
+    (canShare ? '<button type="button" class="btn btn-primary" id="pdfShareBtn" style="margin-bottom:10px;">Share PDF</button>' : '')+
+    '<button type="button" class="btn btn-secondary" id="pdfSaveBtn" style="margin-bottom:10px;">Save to this phone</button>'+
+    '<button type="button" class="btn btn-secondary" id="pdfCloseBtn">Close</button></div>';
+  document.body.appendChild(ov);
+  var sb2 = document.getElementById('pdfShareBtn');
+  if(sb2) sb2.addEventListener('click', function(){ navigator.share({files:[file], title:fname}).then(closePdfReady).catch(function(e){ if(!e || e.name!=='AbortError') alert('Could not open the share sheet. Use Save instead.'); }); });
+  document.getElementById('pdfSaveBtn').addEventListener('click', function(){ downloadBlob(blob, fname); });
+  document.getElementById('pdfCloseBtn').addEventListener('click', closePdfReady);
+  ov.addEventListener('click', function(e){ if(e.target===ov) closePdfReady(); });
 }
 
 function newLog(){
@@ -1092,7 +1130,8 @@ function bottomNav(){
   var showReview = role==='assessor' || role==='admin';
   var html = '<div class="bottom-nav">';
   if(showLogs){
-    html += '<button class="'+(scr==='home'?'active':'')+'" onclick="App.goHome()">'+icon('list',20)+'<span>My logs</span></button>';
+    var att = attention(), attN = att.changes.length + att.fresh.length;
+    html += '<button class="'+(scr==='home'?'active':'')+'" onclick="App.goHome()">'+icon('list',20)+'<span>My logs</span>'+(attN?'<i class="nav-dot">'+attN+'</i>':'')+'</button>';
     html += '<button class="'+(scr==='edit'&&state.draft&&state.draft.status==='draft'?'active':'')+'" onclick="App.newLogTap()">'+icon('plus',22)+'<span>New log</span></button>';
   }
   if(showReview){
@@ -1121,6 +1160,29 @@ function profileCard(){
     '</div><div style="color:var(--neutral-dim);">'+icon('chev',18)+'</div></div>';
 }
 
+function seenSigned(){ return (state.settings && state.settings.seenSigned) || null; }
+function seedSeen(){
+  if(!state.settings || state.settings.seenSigned || !state.index || !state.index.length) return;
+  var m = {}; state.index.forEach(function(l){ if(l.status==='signed') m[l.id]=true; });
+  state.settings.seenSigned = m; try{ saveSettings(); }catch(e){}
+}
+function attention(){
+  if(!state.person || state.person.role==='assessor') return {changes:[], fresh:[]};
+  seedSeen();
+  var seen = seenSigned() || {};
+  var idx = state.index || [];
+  return {changes: idx.filter(function(l){return l.status==='changes_requested';}),
+          fresh: idx.filter(function(l){return l.status==='signed' && !seen[l.id];})};
+}
+function attentionStrip(){
+  var a = attention(); if(!a.changes.length && !a.fresh.length) return '';
+  function row(l, label, cls){
+    return '<div class="att-row" onclick="App.openLog(\''+l.id+'\')"><div class="t">'+esc(l.location||'Untitled location')+'<span>'+l.date+(l.dog?' &middot; '+esc(l.dog):'')+'</span></div><span class="badge '+cls+'">'+label+'</span></div>';
+  }
+  return '<div class="card att-card"><div class="readonly-label" style="margin-bottom:4px;">Needs your attention</div>'+
+    a.changes.map(function(l){ return row(l,'changes requested','changes_requested'); }).join('')+
+    a.fresh.map(function(l){ return row(l,'signed off','signed'); }).join('')+'</div>';
+}
 function logCardHTML(l, badgeClass, badgeText, canDelete){
   var delBtn = canDelete===false ? '' :
     '<button class="rm" style="position:static;background:none;border:none;color:var(--neutral-dim);width:32px;height:32px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;margin-left:2px;" onclick="event.stopPropagation();App.quickDelete(\''+l.id+'\')" aria-label="Delete log">'+icon('trash',16)+'</button>';
@@ -1155,12 +1217,17 @@ function screenHome(){
   var list = filteredIndex();
   var body = profileCard();
   body += '<h1 class="page-title">My training logs</h1>';
+  body += attentionStrip();
   body += filterBar();
   body += '<label class="upload-btn" style="margin:14px 0;">'+icon('map',18)+' Import a shared log file<input type="file" accept="application/json,.json" onchange="App.onImport(event)"></label>';
   if(!list.length){
     body += '<div class="empty">'+icon('dog',40)+'<div>'+(state.index.length?'No logs match this search.':'No logs yet. Tap New log below to start one in the field.')+'</div></div>';
   } else {
-    list.forEach(function(l){ body += logCardHTML(l, l.status, l.status); });
+    var seen = seenSigned() || {};
+    list.forEach(function(l){
+      var fresh = l.status==='signed' && state.person.role!=='assessor' && seenSigned() && !seen[l.id];
+      body += logCardHTML(l, l.status, fresh ? 'signed &middot; new' : l.status.replace('_',' '));
+    });
   }
   return body;
 }
@@ -1457,7 +1524,7 @@ function screenEdit(){
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
-var APP_VERSION = 'v23 - 20 Oct 2026';
+var APP_VERSION = 'v24 - 20 Oct 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
@@ -1510,10 +1577,16 @@ function screenView(){
   var body = '<div class="top-back" onclick="App.goHome()">'+icon('back',16)+' Back to logs</div>';
   body += '<h1 class="page-title">'+d.date+' &middot; '+esc(d.location||'Untitled location')+'</h1>';
   body += '<span class="badge '+d.status+'" style="margin-bottom:10px;display:inline-block;">'+d.status+'</span>';
-  body += '<div class="btn-row" style="margin-bottom:14px;">'+
-    '<button class="btn btn-secondary" onclick="App.shareLog()">Share log file</button>'+
-    '<button class="btn btn-primary" onclick="App.downloadPDF()">Download PDF</button></div>';
-  body += '<button class="btn btn-secondary" style="margin-bottom:14px;" onclick="App.duplicateLogTap()">'+icon('copy',16)+' Duplicate this log</button>';
+  if(d.status==='signed' && d.trainerSignoff && state.person.role!=='assessor'){
+    body += '<div class="notice" style="margin-bottom:12px;">Signed off by <b>'+esc(d.trainerSignoff.name)+'</b> on '+new Date(d.trainerSignoff.date).toLocaleDateString('en-GB')+'. Share or download the PDF below.</div>';
+  } else if(d.status==='changes_requested' && state.person.role!=='assessor'){
+    body += '<div class="notice" style="margin-bottom:12px;">Your assessor has asked for changes. Read the comments below, then tap <b>Continue editing</b> at the bottom of the page.</div>';
+  }
+  body += '<div class="btn-row" style="margin-bottom:10px;">'+
+    '<button class="btn btn-primary" onclick="App.sharePDF()">Share PDF</button>'+
+    '<button class="btn btn-secondary" onclick="App.downloadPDF()">Download PDF</button></div>';
+  body += '<button class="btn btn-secondary" style="margin-bottom:10px;" onclick="App.duplicateLogTap()">'+icon('copy',16)+' Duplicate this log</button>';
+  body += '<button class="btn btn-secondary btn-slim" style="margin-bottom:14px;" onclick="App.shareLog()">Share data file (to import into another phone)</button>';
 
   body += roField('Session type', d.type) + roField('Handler', d.handler) + roField('Location', d.location);
   body += roField('Training objective', d.trainingObjective);
@@ -1550,6 +1623,11 @@ function screenView(){
   body += roField('Reward', d.reward) + roField('FTR', d.ftr);
   body += roField('Objectives met', d.objectivesMet) + roField('Any other comments', d.anyOtherComments);
 
+  if(d.signoffHistory && d.signoffHistory.length){
+    body += '<div class="card"><div class="readonly-label">Sign-off history</div>'+d.signoffHistory.map(function(h){
+      return '<div style="font-size:13px;line-height:1.4;margin-top:6px;">Signed by <b>'+esc(h.name)+'</b> ('+new Date(h.date).toLocaleDateString('en-GB')+'), reopened by <b>'+esc(h.reopenedBy)+'</b> on '+new Date(h.reopenedAt).toLocaleDateString('en-GB')+(h.reason?': '+esc(h.reason):'.')+'</div>';
+    }).join('')+'</div>';
+  }
   if(d.trainerSignoff){
     body += '<div class="card"><div class="readonly-label">Signed off</div>'+
       '<div style="font-size:14px;margin-bottom:8px;">'+esc(d.trainerSignoff.name)+' &middot; '+new Date(d.trainerSignoff.date).toLocaleString()+'</div>'+
@@ -1570,6 +1648,10 @@ function screenView(){
       '</div>';
   } else if(state.person.role!=='assessor' && (d.status==='draft'||d.status==='changes_requested')){
     body += '<button class="btn btn-primary" onclick="App.editCurrentDraft()">Continue editing</button>';
+  }
+  if(d.status==='signed' && (state.person.role==='assessor'||state.person.role==='admin')){
+    body += '<button class="btn btn-secondary" style="margin-top:14px;" onclick="App.reopenLog()">Reopen for changes</button>'+
+      '<div style="font-size:12px;color:var(--neutral-dim);margin-top:6px;line-height:1.4;">Sends the log back to the handler. The current sign-off is kept in the log\'s history and a new one is needed afterwards.</div>';
   }
   if(state.person.role!=='assessor'){
     body += '<button class="btn btn-danger" style="margin-top:14px;" onclick="App.deleteCurrentLog()">Delete this log</button>';
@@ -2241,7 +2323,10 @@ async function trkWake(){
   }catch(e){ if(trk) trk.wakeOk = false; }
   trkUpdateUI();
 }
-document.addEventListener('visibilitychange', function(){
+document.addEventListener('visibilitychange', async function(){
+  if(!document.hidden && state.person && state.person.role!=='assessor' && state.screen==='home' && !state.locked){
+    try{ await loadIndex(); render(); }catch(e){}
+  }
   if(!trk) return;
   if(document.hidden){ trk.breakNext = true; trk.hiddenAt = Date.now(); }
   else { if(trk.hiddenAt && Date.now()-trk.hiddenAt>20000) trk.gapNote = 'Tracking paused for '+fmtElapsed(Date.now()-trk.hiddenAt)+' while the app was hidden.'; trk.hiddenAt=null; trkWake(); trkUpdateUI(); }
@@ -2460,6 +2545,7 @@ window.App = {
     if(!log) return;
     state._arranging=false;
     state.draft = log;
+    if(log.status==='signed' && state.person.role!=='assessor'){ state.settings.seenSigned = state.settings.seenSigned || {}; state.settings.seenSigned[log.id] = true; try{ saveSettings(); }catch(e){} }
     state.screen = (state.person.role!=='assessor' && log.status==='draft') ? 'edit' : 'view';
     render();
   },
@@ -2733,6 +2819,24 @@ window.App = {
 
   shareLog: function(){ if(state.draft) exportLog(state.draft); },
   downloadPDF: function(){ if(state.draft) downloadLogPDF(state.draft); },
+  sharePDF: function(){ if(state.draft) downloadLogPDF(state.draft, 'share'); },
+  reopenLog: async function(){
+    var d = state.draft; if(!d || d.status!=='signed') return;
+    var reason = prompt('Why are you reopening this log? The handler will see this.', '');
+    if(reason===null) return;
+    reason = (reason||'').trim();
+    var so = d.trainerSignoff;
+    d.signoffHistory = d.signoffHistory || [];
+    if(so) d.signoffHistory.push({name:so.name, date:so.date, notes:so.notes||'', reopenedAt:new Date().toISOString(), reopenedBy:state.person.name, reason:reason});
+    d.trainerSignoff = null;
+    d.comments = d.comments || [];
+    d.comments.push({id:uid('c'), authorRole:state.person.role, authorName:state.person.name, body:'Reopened for changes'+(reason?': '+reason:'.'), createdAt:Date.now()});
+    d.status = 'changes_requested';
+    try{ await saveLog(d); }catch(e){}
+    state.screen = state.person.role==='assessor' ? 'trainer' : 'home';
+    try{ if(state.person.role==='assessor') await loadAssessorQueue(); else await loadIndex(); }catch(e){}
+    render();
+  },
   quickDelete: async function(id){
     if(!confirm('Delete this log? This cannot be undone.')) return;
     var res = await sb.from('reports').delete().eq('id',id);
