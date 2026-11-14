@@ -235,7 +235,7 @@ details.section .section-body{padding:4px 16px 16px;}
 (function(){
 
 var SUPABASE_URL = 'https://rxjylnyeokgcgyulcery.supabase.co';
-var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4anlsbnllb2tnY2d5dWxjZXJ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDkwNjcsImV4cCI6MjEwNDEyNTA2N30.rJXecBwmVYu9PcSQs1SaYt9Ik4x57KF7tA-IwKgMaZo';
+var SUPABASE_ANON_KEY = 'sb_publishable_sBGNsdgLrWa8aft-HE9eeA_TejRAUwi';
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 var state = { person:null, loginCode:'', loginError:'', loginBusy:false,
@@ -444,7 +444,8 @@ function storageUploadXHR(path, blob, onProgress){
     var xhr = new XMLHttpRequest();
     var url = SUPABASE_URL+'/storage/v1/object/'+MEDIA_BUCKET+'/'+path.split('/').map(encodeURIComponent).join('/');
     xhr.open('POST', url, true);
-    xhr.setRequestHeader('Authorization', 'Bearer '+SUPABASE_ANON_KEY);
+    /* the newer publishable keys are not JWTs, so only older keys go in as a Bearer token */
+    if(SUPABASE_ANON_KEY.indexOf('eyJ')===0) xhr.setRequestHeader('Authorization', 'Bearer '+SUPABASE_ANON_KEY);
     xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
     xhr.setRequestHeader('x-upsert', 'true');
     xhr.setRequestHeader('Content-Type', blob.type||'application/octet-stream');
@@ -1524,7 +1525,7 @@ function screenEdit(){
   return body;
 }
 /* ---------- arrange the menus (order is remembered on this phone) ---------- */
-var APP_VERSION = 'v24 - 20 Oct 2026';
+var APP_VERSION = 'v25 - 14 Nov 2026';
 var MENU_DEFAULT = ['session','weather','sketch','bounds','ready','ground','timer','trail','scent','photos','gpx','notes','mapping'];
 var MENU_NAMES = {session:'Session', weather:'Weather & direction', sketch:'Sketch map', bounds:'Search area & boundaries', ready:'Pre-search checklist',
   ground:'Search checklist', timer:'Search timer & alerts', trail:'Trail & hides', scent:'Scent article', photos:'Photos', gpx:'GPX map / mapping', notes:'Notes & summary', mapping:'Mapping page'};
